@@ -1,0 +1,78 @@
+{
+  "$schema": "https://claude.ai/schemas/settings.json",
+  "project": {
+    "name": "LiDAR Forest Analysis Platform",
+    "description": "Cloud-based LiDAR analysis for forest inventory and carbon accounting"
+  },
+  "preferences": {
+    "codeStyle": {
+      "typescript": {
+        "quotes": "single",
+        "semicolons": true,
+        "indentSize": 2
+      },
+      "python": {
+        "formatter": "black",
+        "lineLength": 88
+      }
+    },
+    "testing": {
+      "framework": {
+        "frontend": "vitest",
+        "backend": "jest",
+        "python": "pytest",
+        "e2e": "playwright"
+      }
+    }
+  },
+  "agents": {
+    "autoInvoke": true,
+    "defaultModel": "sonnet",
+    "modelOverrides": {
+      "forestry-expert": "opus",
+      "lidar-processing": "opus",
+      "data-processing": "opus",
+      "carbon-accounting": "opus",
+      "ml-model-ops": "opus"
+    }
+  },
+  "files": {
+    "ignore": [
+      "node_modules/**",
+      ".git/**",
+      "dist/**",
+      "build/**",
+      "*.min.js",
+      "*.min.css",
+      "coverage/**",
+      ".next/**",
+      "__pycache__/**",
+      "*.pyc",
+      ".venv/**",
+      "venv/**",
+      "*.egg-info/**",
+      ".pytest_cache/**",
+      "*.las",
+      "*.laz",
+      "*.tif",
+      "*.tiff"
+    ],
+    "alwaysInclude": [
+      "CLAUDE.md",
+      "README.md",
+      "package.json",
+      "pyproject.toml",
+      "tsconfig.json"
+    ]
+  },
+  "context": {
+    "maxFiles": 50,
+    "maxTokensPerFile": 10000,
+    "priorityFiles": [
+      "CLAUDE.md",
+      "src/**/*.ts",
+      "src/**/*.tsx",
+      "src/**/*.py"
+    ]
+  }
+}
