@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useProjectStore } from '../store/projectStore';
+import { FileUploader } from '../components/FileUploader';
 import type { ProjectStatus, Analysis } from '../types';
 
 // Tab types
@@ -122,6 +123,7 @@ function ProjectDetail() {
   const [editDescription, setEditDescription] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [analysisType, setAnalysisType] = useState<Analysis['type']>('tree_detection');
+  const [showUploader, setShowUploader] = useState(false);
 
   const {
     currentProject,
@@ -173,6 +175,14 @@ function ProjectDetail() {
   const handleTabChange = useCallback((tab: TabType) => {
     setActiveTab(tab);
   }, []);
+
+  const handleUploadComplete = useCallback(() => {
+    // Refresh files list after all uploads complete
+    if (id) {
+      fetchProjectFiles(id);
+      fetchProject(id); // Also refresh project to update file count
+    }
+  }, [id, fetchProjectFiles, fetchProject]);
 
   const handleSaveEdit = async () => {
     if (!id || !editName.trim()) return;
@@ -407,13 +417,32 @@ function ProjectDetail() {
           <div className="p-6">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-semibold text-gray-900">Project Files</h2>
-              <button className="inline-flex items-center px-4 py-2 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-forest-600 hover:bg-forest-700">
+              <button
+                onClick={() => setShowUploader(!showUploader)}
+                className={`inline-flex items-center px-4 py-2 border rounded-lg shadow-sm text-sm font-medium transition-colors ${
+                  showUploader
+                    ? 'border-gray-300 text-gray-700 bg-white hover:bg-gray-50'
+                    : 'border-transparent text-white bg-forest-600 hover:bg-forest-700'
+                }`}
+              >
                 <svg className="w-5 h-5 mr-2 -ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={showUploader ? "M6 18L18 6M6 6l12 12" : "M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"} />
                 </svg>
-                Upload Files
+                {showUploader ? 'Hide Uploader' : 'Upload Files'}
               </button>
             </div>
+
+            {/* File Uploader */}
+            {showUploader && id && (
+              <div className="mb-6">
+                <FileUploader
+                  projectId={id}
+                  onAllUploadsComplete={handleUploadComplete}
+                  acceptedFileTypes={['las', 'laz', 'tif', 'tiff', 'shp', 'geojson']}
+                  maxFileSize={10 * 1024 * 1024 * 1024} // 10GB
+                />
+              </div>
+            )}
 
             {isLoadingFiles ? (
               <div className="flex justify-center py-12">
