@@ -6,7 +6,7 @@ export const createRedisConnection = (): Redis => {
   const redis = new Redis({
     host: config.redis.host,
     port: config.redis.port,
-    password: config.redis.password,
+    ...(config.redis.password && { password: config.redis.password }),
     maxRetriesPerRequest: null, // Required for BullMQ
     enableReadyCheck: false,
     retryStrategy: (times: number) => {

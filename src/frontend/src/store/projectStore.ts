@@ -22,7 +22,7 @@ interface PaginationState {
 interface ProjectFilters {
   search: string;
   status: ProjectStatus | '';
-  sortBy: string;
+  sortBy?: string | undefined;
   sortOrder: 'asc' | 'desc';
 }
 
@@ -140,7 +140,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         sortBy: params?.sortBy ?? filters.sortBy,
         sortOrder: params?.sortOrder ?? filters.sortOrder,
         search: params?.search ?? filters.search,
-        status: filters.status || undefined,
+        ...(filters.status ? { status: filters.status } : {}),
       });
 
       set({

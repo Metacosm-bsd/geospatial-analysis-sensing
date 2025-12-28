@@ -3,8 +3,8 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 
 interface FormErrors {
-  email?: string;
-  password?: string;
+  email?: string | undefined;
+  password?: string | undefined;
 }
 
 function Login() {

@@ -58,7 +58,7 @@ const verifyFileOwnership = async (
 ): Promise<void> => {
   try {
     const userId = req.user?.id;
-    const fileId = req.params.fileId;
+    const fileId = req.params.fileId!;
 
     if (!userId) {
       res.status(401).json({
@@ -100,7 +100,7 @@ router.post(
   validateBody(CompleteUploadDtoSchema),
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const fileId = req.params.fileId;
+      const fileId = req.params.fileId!;
       const { checksum } = req.body;
 
       const file = await fileService.completeUpload(fileId, checksum);
@@ -158,7 +158,7 @@ router.get(
   verifyFileOwnership,
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const fileId = req.params.fileId;
+      const fileId = req.params.fileId!;
 
       const file = await fileService.getFileMetadata(fileId);
 
@@ -203,7 +203,7 @@ router.delete(
   verifyFileOwnership,
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const fileId = req.params.fileId;
+      const fileId = req.params.fileId!;
 
       await fileService.deleteFile(fileId);
 
@@ -243,7 +243,7 @@ router.get(
   verifyFileOwnership,
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const fileId = req.params.fileId;
+      const fileId = req.params.fileId!;
 
       const downloadUrl = await fileService.generateDownloadUrl(fileId);
 

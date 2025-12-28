@@ -180,7 +180,7 @@ function ProjectDetail() {
     try {
       await updateProject(id, {
         name: editName.trim(),
-        description: editDescription.trim() || undefined,
+        ...(editDescription.trim() ? { description: editDescription.trim() } : {}),
       });
       setIsEditing(false);
     } catch {

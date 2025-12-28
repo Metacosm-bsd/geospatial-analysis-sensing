@@ -7,8 +7,8 @@ interface CreateProjectModalProps {
 }
 
 interface FormErrors {
-  name?: string;
-  description?: string;
+  name?: string | undefined;
+  description?: string | undefined;
 }
 
 function CreateProjectModal({ onClose, onSuccess }: CreateProjectModalProps) {
@@ -48,7 +48,7 @@ function CreateProjectModal({ onClose, onSuccess }: CreateProjectModalProps) {
     try {
       await createProject({
         name: name.trim(),
-        description: description.trim() || undefined,
+        ...(description.trim() ? { description: description.trim() } : {}),
       });
       onSuccess();
     } catch {

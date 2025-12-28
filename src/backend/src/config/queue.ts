@@ -16,7 +16,7 @@ export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
 const connectionOptions: ConnectionOptions = {
   host: config.redis.host,
   port: config.redis.port,
-  password: config.redis.password,
+  ...(config.redis.password && { password: config.redis.password }),
 };
 
 // Queue factory

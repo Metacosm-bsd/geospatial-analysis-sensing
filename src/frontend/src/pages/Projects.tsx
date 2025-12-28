@@ -93,13 +93,6 @@ function Projects() {
     [setFilters]
   );
 
-  const handleSortChange = useCallback(
-    (sortBy: string) => {
-      const newOrder = filters.sortBy === sortBy && filters.sortOrder === 'desc' ? 'asc' : 'desc';
-      setFilters({ sortBy, sortOrder: newOrder });
-    },
-    [filters.sortBy, filters.sortOrder, setFilters]
-  );
 
   const handleDeleteProject = async (projectId: string) => {
     try {
@@ -207,8 +200,8 @@ function Projects() {
             <select
               value={`${filters.sortBy}-${filters.sortOrder}`}
               onChange={(e) => {
-                const [sortBy, sortOrder] = e.target.value.split('-');
-                setFilters({ sortBy, sortOrder: sortOrder as 'asc' | 'desc' });
+                const [newSortBy, newSortOrder] = e.target.value.split('-');
+                setFilters({ sortBy: newSortBy || undefined, sortOrder: newSortOrder as 'asc' | 'desc' });
               }}
               className="px-3 py-1 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-forest-500"
             >

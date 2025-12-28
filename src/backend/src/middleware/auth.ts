@@ -30,12 +30,12 @@ export interface TokenPair {
  */
 export const generateTokens = (payload: Omit<JwtPayload, 'iat' | 'exp'>): TokenPair => {
   const accessToken = jwt.sign(payload, config.jwt.secret, {
-    expiresIn: config.jwt.expiresIn,
-  });
+    expiresIn: config.jwt.expiresIn as string,
+  } as jwt.SignOptions);
 
   const refreshToken = jwt.sign(payload, config.jwt.refreshSecret, {
-    expiresIn: config.jwt.refreshExpiresIn,
-  });
+    expiresIn: config.jwt.refreshExpiresIn as string,
+  } as jwt.SignOptions);
 
   return { accessToken, refreshToken };
 };

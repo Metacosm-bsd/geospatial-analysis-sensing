@@ -11,7 +11,9 @@ import type {
   PaginatedResult,
   CreateFileDto,
 } from '../types/dto.js';
-import type { Prisma } from '@prisma/client';
+
+// Type alias for JSON values since Prisma types may not be generated
+type JsonValue = string | number | boolean | null | { [key: string]: JsonValue } | JsonValue[];
 
 /**
  * Create a new project for a user
@@ -22,8 +24,8 @@ export async function create(userId: string, data: CreateProjectDto): Promise<Pr
       data: {
         name: data.name,
         description: data.description,
-        bounds: data.bounds as Prisma.InputJsonValue,
-        metadata: data.metadata as Prisma.InputJsonValue,
+        bounds: data.bounds as JsonValue,
+        metadata: data.metadata as JsonValue,
         userId,
       },
       include: {
@@ -56,19 +58,19 @@ export async function findAll(
     const skip = (page - 1) * limit;
 
     // Build where clause
-    const where: Prisma.ProjectWhereInput = {
+    const where = {
       userId,
       ...(status && { status }),
       ...(search && {
         OR: [
-          { name: { contains: search, mode: 'insensitive' } },
-          { description: { contains: search, mode: 'insensitive' } },
+          { name: { contains: search, mode: 'insensitive' as const } },
+          { description: { contains: search, mode: 'insensitive' as const } },
         ],
       }),
     };
 
     // Build order by clause
-    const orderBy: Prisma.ProjectOrderByWithRelationInput = {
+    const orderBy = {
       [sortBy]: sortOrder,
     };
 
@@ -178,12 +180,12 @@ export async function update(
     }
 
     // Build update data
-    const updateData: Prisma.ProjectUpdateInput = {};
+    const updateData: Record<string, unknown> = {};
     if (data.name !== undefined) updateData.name = data.name;
     if (data.description !== undefined) updateData.description = data.description;
     if (data.status !== undefined) updateData.status = data.status;
-    if (data.bounds !== undefined) updateData.bounds = data.bounds as Prisma.InputJsonValue;
-    if (data.metadata !== undefined) updateData.metadata = data.metadata as Prisma.InputJsonValue;
+    if (data.bounds !== undefined) updateData.bounds = data.bounds as JsonValue;
+    if (data.metadata !== undefined) updateData.metadata = data.metadata as JsonValue;
 
     const project = await prisma.project.update({
       where: { id },
@@ -311,20 +313,20 @@ export async function getProjectStats(projectId: string) {
       }),
     ]);
 
-    const totalFiles = fileStats.reduce((sum, stat) => sum + stat._count, 0);
-    const totalAnalyses = analysisStats.reduce((sum, stat) => sum + stat._count, 0);
+    const totalFiles = fileStats.reduce((sum: number, stat: { _count: number }) => sum + stat._count, 0);
+    const totalAnalyses = analysisStats.reduce((sum: number, stat: { _count: number }) => sum + stat._count, 0);
 
     return {
       files: {
         total: totalFiles,
         byStatus: Object.fromEntries(
-          fileStats.map((stat) => [stat.status, stat._count])
+          fileStats.map((stat: { status: string; _count: number }) => [stat.status, stat._count])
         ),
       },
       analyses: {
         total: totalAnalyses,
         byStatus: Object.fromEntries(
-          analysisStats.map((stat) => [stat.status, stat._count])
+          analysisStats.map((stat: { status: string; _count: number }) => [stat.status, stat._count])
         ),
       },
     };

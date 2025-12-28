@@ -52,7 +52,7 @@ export async function login(email: string, password: string): Promise<LoginRespo
       password,
     } as LoginRequest);
 
-    const { user, tokens } = response.data;
+    const { tokens } = response.data;
 
     // Store tokens in localStorage
     tokenStorage.setTokens(tokens.accessToken, tokens.refreshToken);

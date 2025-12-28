@@ -5,12 +5,11 @@ import crypto from 'crypto';
 import { prisma } from '../config/database.js';
 import { config } from '../config/index.js';
 import { logger } from '../config/logger.js';
-import { generateTokens, verifyRefreshToken, type JwtPayload } from '../middleware/auth.js';
-import type { RegisterDto, LoginDto, AuthResponse } from '../types/dto.js';
+import { generateTokens, verifyRefreshToken } from '../middleware/auth.js';
+import type { RegisterDto, AuthResponse } from '../types/dto.js';
 import * as userService from './user.service.js';
 
 // Token expiry times
-const ACCESS_TOKEN_EXPIRY = '15m';
 const REFRESH_TOKEN_EXPIRY_DAYS = 7;
 const PASSWORD_RESET_EXPIRY_HOURS = 1;
 
@@ -24,6 +23,7 @@ export async function register(data: RegisterDto): Promise<AuthResponse> {
       email: data.email,
       password: data.password,
       name: data.name,
+      role: 'USER',
     });
 
     // Generate tokens

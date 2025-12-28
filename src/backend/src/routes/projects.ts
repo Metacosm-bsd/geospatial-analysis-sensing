@@ -91,7 +91,7 @@ router.get(
         return;
       }
 
-      const filters = req.query as z.infer<typeof ProjectFilterSchema>;
+      const filters = req.query as unknown as z.infer<typeof ProjectFilterSchema>;
       const result = await projectService.findAll(userId, filters);
 
       res.status(200).json({
@@ -156,7 +156,7 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const userId = req.user?.id;
-      const projectId = req.params.id;
+      const projectId = req.params.id!;
 
       if (!userId) {
         res.status(401).json({
@@ -219,7 +219,7 @@ router.put(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const userId = req.user?.id;
-      const projectId = req.params.id;
+      const projectId = req.params.id!;
 
       if (!userId) {
         res.status(401).json({
@@ -277,7 +277,7 @@ router.delete(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const userId = req.user?.id;
-      const projectId = req.params.id;
+      const projectId = req.params.id!;
       const hardDelete = req.query.permanent === 'true';
 
       if (!userId) {
@@ -288,7 +288,7 @@ router.delete(
         return;
       }
 
-      await projectService.delete(projectId, userId, hardDelete);
+      await projectService.deleteProject(projectId, userId, hardDelete);
 
       res.status(200).json({
         success: true,
@@ -338,7 +338,7 @@ router.post(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const userId = req.user?.id;
-      const projectId = req.params.id;
+      const projectId = req.params.id!;
 
       if (!userId) {
         res.status(401).json({
@@ -428,7 +428,7 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const userId = req.user?.id;
-      const projectId = req.params.id;
+      const projectId = req.params.id!;
 
       if (!userId) {
         res.status(401).json({
@@ -483,7 +483,7 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const userId = req.user?.id;
-      const projectId = req.params.id;
+      const projectId = req.params.id!;
 
       if (!userId) {
         res.status(401).json({

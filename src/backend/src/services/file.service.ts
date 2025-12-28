@@ -7,7 +7,9 @@ import { prisma } from '../config/database.js';
 import { config } from '../config/index.js';
 import { logger } from '../config/logger.js';
 import type { FileType, FileResponse } from '../types/dto.js';
-import type { Prisma } from '@prisma/client';
+
+// Type alias for JSON values since Prisma types may not be generated
+type JsonValue = string | number | boolean | null | { [key: string]: JsonValue } | JsonValue[];
 
 // File type mappings based on extension
 const FILE_TYPE_MAP: Record<string, FileType> = {
@@ -136,7 +138,7 @@ export async function completeUpload(
     }
 
     // Update file status to processing
-    const updatedFile = await prisma.file.update({
+    await prisma.file.update({
       where: { id: fileId },
       data: {
         status: 'PROCESSING',
@@ -244,7 +246,7 @@ export async function updateFileStatus(
   error?: string
 ): Promise<FileResponse> {
   try {
-    const updateData: Prisma.FileUpdateInput = {
+    const updateData: Record<string, unknown> = {
       status,
       ...(status === 'READY' && { processedAt: new Date() }),
       ...(status === 'ERROR' && { processingError: error }),
@@ -280,11 +282,11 @@ export async function updateFileMetadata(
     const file = await prisma.file.update({
       where: { id: fileId },
       data: {
-        bounds: metadata.bounds as Prisma.InputJsonValue,
+        bounds: metadata.bounds as JsonValue,
         crs: metadata.crs,
         pointCount: metadata.pointCount ? BigInt(metadata.pointCount) : undefined,
         resolution: metadata.resolution,
-        metadata: metadata.metadata as Prisma.InputJsonValue,
+        metadata: metadata.metadata as JsonValue,
       },
     });
 

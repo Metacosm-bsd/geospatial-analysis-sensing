@@ -105,7 +105,7 @@ export interface Analysis {
 export interface PaginationParams {
   page?: number;
   limit?: number;
-  sortBy?: string;
+  sortBy?: string | undefined;
   sortOrder?: 'asc' | 'desc';
   search?: string;
 }

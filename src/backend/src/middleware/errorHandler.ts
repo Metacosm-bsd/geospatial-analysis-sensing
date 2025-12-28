@@ -9,7 +9,7 @@ import { config } from '../config/index.js';
 export class AppError extends Error {
   public readonly statusCode: number;
   public readonly isOperational: boolean;
-  public readonly code?: string;
+  public readonly code?: string | undefined;
   public readonly details?: unknown;
 
   constructor(
@@ -76,9 +76,9 @@ const formatZodError = (error: ZodError): { field: string; message: string }[] =
 interface ErrorResponse {
   error: string;
   message: string;
-  code?: string;
+  code?: string | undefined;
   details?: unknown;
-  stack?: string;
+  stack?: string | undefined;
 }
 
 /**
