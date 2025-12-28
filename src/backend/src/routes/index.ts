@@ -2,6 +2,7 @@ import { Router } from 'express';
 import authRouter from './auth.js';
 import projectsRouter from './projects.js';
 import analysesRouter from './analyses.js';
+import filesRouter from './files.js';
 
 const router = Router();
 
@@ -9,6 +10,7 @@ const router = Router();
 router.use('/auth', authRouter);
 router.use('/projects', projectsRouter);
 router.use('/analyses', analysesRouter);
+router.use('/files', filesRouter);
 
 // API info endpoint
 router.get('/', (_req, res) => {
@@ -19,6 +21,7 @@ router.get('/', (_req, res) => {
       auth: '/api/v1/auth',
       projects: '/api/v1/projects',
       analyses: '/api/v1/analyses',
+      files: '/api/v1/files',
     },
   });
 });

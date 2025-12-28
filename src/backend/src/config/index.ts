@@ -18,9 +18,9 @@ const envSchema = z.object({
 
   // JWT
   JWT_SECRET: z.string().min(32).default('your-super-secret-jwt-key-change-in-production'),
-  JWT_EXPIRES_IN: z.string().default('7d'),
+  JWT_EXPIRES_IN: z.string().default('15m'), // Access token expires in 15 minutes
   JWT_REFRESH_SECRET: z.string().min(32).default('your-super-secret-refresh-key-change-in-production'),
-  JWT_REFRESH_EXPIRES_IN: z.string().default('30d'),
+  JWT_REFRESH_EXPIRES_IN: z.string().default('7d'), // Refresh token expires in 7 days
 
   // CORS
   CORS_ORIGINS: z.string().default('http://localhost:3000,http://localhost:5173'),

@@ -174,3 +174,6 @@ export interface JobResult {
   statistics?: Record<string, unknown>;
   error?: string;
 }
+
+// Re-export DTOs
+export * from './dto.js';

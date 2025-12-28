@@ -1,217 +1,523 @@
-import { Router, type Request, type Response } from 'express';
-import { body, param, query, validationResult } from 'express-validator';
+import { Router, type Request, type Response, type NextFunction } from 'express';
+import { z } from 'zod';
 import { authenticateToken } from '../middleware/auth.js';
+import { logger } from '../config/logger.js';
+import * as projectService from '../services/project.service.js';
+import {
+  CreateProjectDtoSchema,
+  UpdateProjectDtoSchema,
+  ProjectFilterSchema,
+  InitUploadDtoSchema,
+} from '../types/dto.js';
+import * as fileService from '../services/file.service.js';
 
 const router = Router();
 
 // All project routes require authentication
 router.use(authenticateToken);
 
-// Validation middleware
-const validateProjectCreate = [
-  body('name').trim().isLength({ min: 1, max: 255 }).withMessage('Project name is required (max 255 characters)'),
-  body('description').optional().trim().isLength({ max: 2000 }).withMessage('Description max 2000 characters'),
-  body('bounds')
-    .optional()
-    .isObject()
-    .withMessage('Bounds must be a GeoJSON object')
-    .custom((value) => {
-      if (value && value.type !== 'Polygon') {
-        throw new Error('Bounds must be a GeoJSON Polygon');
-      }
-      return true;
-    }),
-];
+/**
+ * Middleware to validate request body with Zod schema
+ */
+const validateBody = <T>(schema: z.ZodSchema<T>) => {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const result = schema.safeParse(req.body);
+    if (!result.success) {
+      res.status(400).json({
+        success: false,
+        error: 'Validation failed',
+        details: result.error.flatten().fieldErrors,
+      });
+      return;
+    }
+    req.body = result.data;
+    next();
+  };
+};
 
-const validateProjectUpdate = [
-  body('name')
-    .optional()
-    .trim()
-    .isLength({ min: 1, max: 255 })
-    .withMessage('Project name max 255 characters'),
-  body('description').optional().trim().isLength({ max: 2000 }).withMessage('Description max 2000 characters'),
-  body('status')
-    .optional()
-    .isIn(['active', 'archived', 'completed'])
-    .withMessage('Status must be active, archived, or completed'),
-];
+/**
+ * Middleware to validate query parameters with Zod schema
+ */
+const validateQuery = <T>(schema: z.ZodSchema<T>) => {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const result = schema.safeParse(req.query);
+    if (!result.success) {
+      res.status(400).json({
+        success: false,
+        error: 'Invalid query parameters',
+        details: result.error.flatten().fieldErrors,
+      });
+      return;
+    }
+    req.query = result.data as typeof req.query;
+    next();
+  };
+};
 
-// GET /api/v1/projects
+/**
+ * Middleware to validate UUID parameter
+ */
+const validateUUID = (paramName: string) => {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const value = req.params[paramName];
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!value || !uuidRegex.test(value)) {
+      res.status(400).json({
+        success: false,
+        error: 'Invalid parameter',
+        message: `Invalid ${paramName} format`,
+      });
+      return;
+    }
+    next();
+  };
+};
+
+/**
+ * GET /api/v1/projects
+ * List all projects for the authenticated user
+ */
 router.get(
   '/',
-  [
-    query('page').optional().isInt({ min: 1 }).toInt().withMessage('Page must be a positive integer'),
-    query('limit').optional().isInt({ min: 1, max: 100 }).toInt().withMessage('Limit must be between 1 and 100'),
-    query('status').optional().isIn(['active', 'archived', 'completed']).withMessage('Invalid status'),
-    query('search').optional().trim().isLength({ max: 255 }).withMessage('Search max 255 characters'),
-  ],
-  (req: Request, res: Response) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      res.status(400).json({ errors: errors.array() });
-      return;
+  validateQuery(ProjectFilterSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+        });
+        return;
+      }
+
+      const filters = req.query as z.infer<typeof ProjectFilterSchema>;
+      const result = await projectService.findAll(userId, filters);
+
+      res.status(200).json({
+        success: true,
+        data: result.data,
+        pagination: result.pagination,
+      });
+    } catch (error) {
+      logger.error('Error listing projects:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to list projects',
+        message: 'An error occurred while fetching projects',
+      });
     }
-
-    // TODO: Implement list projects
-    // - Get projects for authenticated user
-    // - Apply pagination, filtering, and search
-    // - Include project statistics
-
-    res.status(501).json({
-      message: 'List projects endpoint - implementation pending',
-      userId: req.user?.id,
-      query: {
-        page: req.query.page ?? 1,
-        limit: req.query.limit ?? 20,
-        status: req.query.status,
-        search: req.query.search,
-      },
-    });
   }
 );
 
-// POST /api/v1/projects
-router.post('/', validateProjectCreate, (req: Request, res: Response) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    res.status(400).json({ errors: errors.array() });
-    return;
+/**
+ * POST /api/v1/projects
+ * Create a new project
+ */
+router.post(
+  '/',
+  validateBody(CreateProjectDtoSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+        });
+        return;
+      }
+
+      const project = await projectService.create(userId, req.body);
+
+      res.status(201).json({
+        success: true,
+        message: 'Project created successfully',
+        data: project,
+      });
+    } catch (error) {
+      logger.error('Error creating project:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to create project',
+        message: 'An error occurred while creating the project',
+      });
+    }
   }
+);
 
-  // TODO: Implement create project
-  // - Create project in database
-  // - Associate with authenticated user
-  // - Create project directory for files
-
-  res.status(501).json({
-    message: 'Create project endpoint - implementation pending',
-    userId: req.user?.id,
-    receivedData: {
-      name: req.body.name,
-      description: req.body.description,
-      bounds: req.body.bounds,
-    },
-  });
-});
-
-// GET /api/v1/projects/:id
+/**
+ * GET /api/v1/projects/:id
+ * Get a specific project by ID
+ */
 router.get(
   '/:id',
-  [param('id').isUUID().withMessage('Invalid project ID')],
-  (req: Request, res: Response) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      res.status(400).json({ errors: errors.array() });
-      return;
+  validateUUID('id'),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      const projectId = req.params.id;
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+        });
+        return;
+      }
+
+      const project = await projectService.findById(projectId);
+
+      if (!project) {
+        res.status(404).json({
+          success: false,
+          error: 'Project not found',
+          message: 'The requested project does not exist',
+        });
+        return;
+      }
+
+      // Verify ownership (unless admin)
+      if (project.userId !== userId && req.user?.role !== 'admin') {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied',
+          message: 'You do not have permission to access this project',
+        });
+        return;
+      }
+
+      // Get project statistics
+      const stats = await projectService.getProjectStats(projectId);
+
+      res.status(200).json({
+        success: true,
+        data: {
+          ...project,
+          stats,
+        },
+      });
+    } catch (error) {
+      logger.error('Error getting project:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to get project',
+        message: 'An error occurred while fetching the project',
+      });
     }
-
-    // TODO: Implement get project by ID
-    // - Fetch project with files and analyses
-    // - Verify user has access
-    // - Include project statistics
-
-    res.status(501).json({
-      message: 'Get project endpoint - implementation pending',
-      projectId: req.params.id,
-      userId: req.user?.id,
-    });
   }
 );
 
-// PUT /api/v1/projects/:id
+/**
+ * PUT /api/v1/projects/:id
+ * Update a project
+ */
 router.put(
   '/:id',
-  [param('id').isUUID().withMessage('Invalid project ID'), ...validateProjectUpdate],
-  (req: Request, res: Response) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      res.status(400).json({ errors: errors.array() });
-      return;
+  validateUUID('id'),
+  validateBody(UpdateProjectDtoSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      const projectId = req.params.id;
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+        });
+        return;
+      }
+
+      const project = await projectService.update(projectId, userId, req.body);
+
+      res.status(200).json({
+        success: true,
+        message: 'Project updated successfully',
+        data: project,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Update failed';
+      logger.error('Error updating project:', error);
+
+      if (message.includes('not found')) {
+        res.status(404).json({
+          success: false,
+          error: 'Project not found',
+          message: 'The requested project does not exist',
+        });
+        return;
+      }
+
+      if (message.includes('Access denied')) {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied',
+          message: 'You do not have permission to update this project',
+        });
+        return;
+      }
+
+      res.status(500).json({
+        success: false,
+        error: 'Failed to update project',
+        message: 'An error occurred while updating the project',
+      });
     }
-
-    // TODO: Implement update project
-    // - Verify user owns project
-    // - Update project fields
-    // - Return updated project
-
-    res.status(501).json({
-      message: 'Update project endpoint - implementation pending',
-      projectId: req.params.id,
-      userId: req.user?.id,
-      receivedData: req.body,
-    });
   }
 );
 
-// DELETE /api/v1/projects/:id
+/**
+ * DELETE /api/v1/projects/:id
+ * Delete or archive a project
+ */
 router.delete(
   '/:id',
-  [param('id').isUUID().withMessage('Invalid project ID')],
-  (req: Request, res: Response) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      res.status(400).json({ errors: errors.array() });
-      return;
+  validateUUID('id'),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      const projectId = req.params.id;
+      const hardDelete = req.query.permanent === 'true';
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+        });
+        return;
+      }
+
+      await projectService.delete(projectId, userId, hardDelete);
+
+      res.status(200).json({
+        success: true,
+        message: hardDelete
+          ? 'Project deleted permanently'
+          : 'Project archived successfully',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Delete failed';
+      logger.error('Error deleting project:', error);
+
+      if (message.includes('not found')) {
+        res.status(404).json({
+          success: false,
+          error: 'Project not found',
+          message: 'The requested project does not exist',
+        });
+        return;
+      }
+
+      if (message.includes('Access denied')) {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied',
+          message: 'You do not have permission to delete this project',
+        });
+        return;
+      }
+
+      res.status(500).json({
+        success: false,
+        error: 'Failed to delete project',
+        message: 'An error occurred while deleting the project',
+      });
     }
-
-    // TODO: Implement delete project
-    // - Verify user owns project
-    // - Delete associated files from storage
-    // - Delete project and related data from database
-
-    res.status(501).json({
-      message: 'Delete project endpoint - implementation pending',
-      projectId: req.params.id,
-      userId: req.user?.id,
-    });
   }
 );
 
-// POST /api/v1/projects/:id/files
+/**
+ * POST /api/v1/projects/:id/files
+ * Initialize file upload for a project
+ */
 router.post(
   '/:id/files',
-  [param('id').isUUID().withMessage('Invalid project ID')],
-  (req: Request, res: Response) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      res.status(400).json({ errors: errors.array() });
-      return;
+  validateUUID('id'),
+  validateBody(InitUploadDtoSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      const projectId = req.params.id;
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+        });
+        return;
+      }
+
+      // Verify ownership
+      const isOwner = await projectService.isOwner(projectId, userId);
+      if (!isOwner && req.user?.role !== 'admin') {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied',
+          message: 'You do not have permission to upload files to this project',
+        });
+        return;
+      }
+
+      const { filename, size, mimeType } = req.body;
+
+      // Validate file type
+      if (!fileService.isAllowedFileType(filename)) {
+        res.status(400).json({
+          success: false,
+          error: 'Invalid file type',
+          message: `Allowed file types: ${fileService.getSupportedExtensions().join(', ')}`,
+        });
+        return;
+      }
+
+      const uploadSession = await fileService.createUploadSession(
+        projectId,
+        filename,
+        size,
+        mimeType
+      );
+
+      res.status(201).json({
+        success: true,
+        message: 'Upload session created',
+        data: {
+          fileId: uploadSession.id,
+          storagePath: uploadSession.storagePath,
+          fileType: uploadSession.fileType,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Upload init failed';
+      logger.error('Error initializing upload:', error);
+
+      if (message.includes('not found')) {
+        res.status(404).json({
+          success: false,
+          error: 'Project not found',
+          message: 'The requested project does not exist',
+        });
+        return;
+      }
+
+      if (message.includes('exceeds maximum')) {
+        res.status(400).json({
+          success: false,
+          error: 'File too large',
+          message,
+        });
+        return;
+      }
+
+      res.status(500).json({
+        success: false,
+        error: 'Failed to initialize upload',
+        message: 'An error occurred while initializing the upload',
+      });
     }
-
-    // TODO: Implement file upload
-    // - Verify user owns project
-    // - Handle multipart file upload
-    // - Store file and create database record
-    // - Queue file processing job
-
-    res.status(501).json({
-      message: 'Upload file endpoint - implementation pending',
-      projectId: req.params.id,
-      userId: req.user?.id,
-    });
   }
 );
 
-// GET /api/v1/projects/:id/files
+/**
+ * GET /api/v1/projects/:id/files
+ * List all files in a project
+ */
 router.get(
   '/:id/files',
-  [param('id').isUUID().withMessage('Invalid project ID')],
-  (req: Request, res: Response) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      res.status(400).json({ errors: errors.array() });
-      return;
+  validateUUID('id'),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      const projectId = req.params.id;
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+        });
+        return;
+      }
+
+      // Verify ownership
+      const isOwner = await projectService.isOwner(projectId, userId);
+      if (!isOwner && req.user?.role !== 'admin') {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied',
+          message: 'You do not have permission to access this project',
+        });
+        return;
+      }
+
+      const files = await fileService.getFilesByProject(projectId);
+
+      // Convert BigInt to string for JSON serialization
+      const serializedFiles = files.map((file) => ({
+        ...file,
+        size: file.size.toString(),
+        pointCount: file.pointCount?.toString() ?? null,
+      }));
+
+      res.status(200).json({
+        success: true,
+        data: serializedFiles,
+      });
+    } catch (error) {
+      logger.error('Error listing files:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to list files',
+        message: 'An error occurred while fetching files',
+      });
     }
+  }
+);
 
-    // TODO: Implement list project files
-    // - Verify user has access to project
-    // - Return list of files with metadata
+/**
+ * GET /api/v1/projects/:id/stats
+ * Get project statistics
+ */
+router.get(
+  '/:id/stats',
+  validateUUID('id'),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      const projectId = req.params.id;
 
-    res.status(501).json({
-      message: 'List project files endpoint - implementation pending',
-      projectId: req.params.id,
-      userId: req.user?.id,
-    });
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+        });
+        return;
+      }
+
+      // Verify ownership
+      const isOwner = await projectService.isOwner(projectId, userId);
+      if (!isOwner && req.user?.role !== 'admin') {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied',
+          message: 'You do not have permission to access this project',
+        });
+        return;
+      }
+
+      const stats = await projectService.getProjectStats(projectId);
+
+      res.status(200).json({
+        success: true,
+        data: stats,
+      });
+    } catch (error) {
+      logger.error('Error getting project stats:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to get statistics',
+        message: 'An error occurred while fetching statistics',
+      });
+    }
   }
 );
 
