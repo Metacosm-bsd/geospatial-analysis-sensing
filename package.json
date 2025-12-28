@@ -1,0 +1,47 @@
+{
+  "name": "lidar-forest-analysis-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloud-based LiDAR forest analysis platform for inventory and carbon accounting",
+  "workspaces": [
+    "src/frontend",
+    "src/backend"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run frontend\" \"npm run backend\"",
+    "frontend": "npm run dev --workspace=src/frontend",
+    "backend": "npm run dev --workspace=src/backend",
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces",
+    "lint": "npm run lint --workspaces",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "db:migrate": "npm run db:migrate --workspace=src/backend",
+    "db:generate": "npm run db:generate --workspace=src/backend",
+    "db:seed": "npm run db:seed --workspace=src/backend",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "prettier": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Metacosm-bsd/geospatial-analysis-sensing.git"
+  },
+  "keywords": [
+    "lidar",
+    "forestry",
+    "carbon",
+    "gis",
+    "point-cloud",
+    "tree-detection"
+  ],
+  "author": "Metacosm",
+  "license": "MIT"
+}

@@ -1,0 +1,304 @@
+// Prisma schema for LiDAR Forest Analysis Platform
+// PostgreSQL with PostGIS extension for spatial data support
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [postgis]
+}
+
+// ============================================================================
+// User Management
+// ============================================================================
+
+model User {
+  id                String    @id @default(uuid())
+  email             String    @unique
+  passwordHash      String    @map("password_hash")
+  name              String
+  role              UserRole  @default(USER)
+  emailVerified     Boolean   @default(false) @map("email_verified")
+  emailVerifiedAt   DateTime? @map("email_verified_at")
+  avatarUrl         String?   @map("avatar_url")
+
+  // Password reset
+  passwordResetToken     String?   @map("password_reset_token")
+  passwordResetExpiresAt DateTime? @map("password_reset_expires_at")
+
+  // Refresh tokens for JWT
+  refreshTokens     RefreshToken[]
+
+  // Relations
+  projects          Project[]
+
+  // Timestamps
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  lastLoginAt       DateTime? @map("last_login_at")
+
+  @@map("users")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  revokedAt DateTime? @map("revoked_at")
+
+  @@index([userId])
+  @@index([token])
+  @@map("refresh_tokens")
+}
+
+// ============================================================================
+// Project Management
+// ============================================================================
+
+model Project {
+  id          String        @id @default(uuid())
+  name        String
+  description String?
+  status      ProjectStatus @default(ACTIVE)
+
+  // Owner
+  userId      String        @map("user_id")
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Spatial bounds (GeoJSON Polygon stored as JSON, or use PostGIS geometry)
+  bounds      Json?         // GeoJSON Polygon for project area
+
+  // Metadata
+  metadata    Json?         // Additional project metadata
+
+  // Relations
+  files       File[]
+  analyses    Analysis[]
+
+  // Timestamps
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@index([status])
+  @@map("projects")
+}
+
+enum ProjectStatus {
+  ACTIVE
+  ARCHIVED
+  COMPLETED
+}
+
+// ============================================================================
+// File Management
+// ============================================================================
+
+model File {
+  id            String     @id @default(uuid())
+  name          String     // Original filename
+  storagePath   String     @map("storage_path") // Path in storage system
+  mimeType      String     @map("mime_type")
+  size          BigInt     // File size in bytes
+  checksum      String?    // MD5 or SHA256 checksum
+
+  // File type classification
+  fileType      FileType   @map("file_type")
+
+  // Processing status
+  status        FileStatus @default(PENDING)
+  processingError String?  @map("processing_error")
+
+  // Spatial metadata (extracted from LiDAR/raster files)
+  bounds        Json?      // GeoJSON bounding box
+  crs           String?    // Coordinate reference system (e.g., "EPSG:4326")
+  pointCount    BigInt?    @map("point_count") // For LiDAR files
+  resolution    Float?     // For raster files (meters per pixel)
+
+  // Additional metadata extracted during processing
+  metadata      Json?
+
+  // Relations
+  projectId     String     @map("project_id")
+  project       Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // Files used in analyses
+  analysisFiles AnalysisFile[]
+
+  // Timestamps
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
+  processedAt   DateTime?  @map("processed_at")
+
+  @@index([projectId])
+  @@index([fileType])
+  @@index([status])
+  @@map("files")
+}
+
+enum FileType {
+  LAS         // LAS/LAZ point cloud
+  LAZ         // Compressed LAS
+  GEOTIFF     // GeoTIFF raster
+  SHAPEFILE   // Shapefile (zipped)
+  GEOJSON     // GeoJSON vector
+  COG         // Cloud Optimized GeoTIFF
+  OTHER
+}
+
+enum FileStatus {
+  PENDING     // Awaiting processing
+  PROCESSING  // Currently being processed
+  READY       // Processed and ready for analysis
+  ERROR       // Processing failed
+}
+
+// ============================================================================
+// Analysis Management
+// ============================================================================
+
+model Analysis {
+  id            String         @id @default(uuid())
+  name          String
+  type          AnalysisType
+
+  // Analysis parameters (type-specific configuration)
+  parameters    Json?
+
+  // Processing status
+  status        AnalysisStatus @default(PENDING)
+  progress      Float          @default(0) // 0-100 percentage
+  progressMessage String?      @map("progress_message")
+  errorMessage  String?        @map("error_message")
+
+  // Spatial bounds for analysis area
+  bounds        Json?          // GeoJSON Polygon/MultiPolygon
+
+  // Results
+  results       Json?          // Analysis results as JSON
+  resultFiles   ResultFile[]   // Generated result files
+
+  // Statistics
+  statistics    Json?          // Summary statistics
+
+  // Processing metadata
+  startedAt     DateTime?      @map("started_at")
+  completedAt   DateTime?      @map("completed_at")
+  processingTime Int?          @map("processing_time") // Duration in seconds
+
+  // Relations
+  projectId     String         @map("project_id")
+  project       Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // Input files
+  analysisFiles AnalysisFile[]
+
+  // Timestamps
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  @@index([projectId])
+  @@index([type])
+  @@index([status])
+  @@map("analyses")
+}
+
+enum AnalysisType {
+  TREE_DETECTION
+  CANOPY_HEIGHT
+  BIOMASS_ESTIMATION
+  SPECIES_CLASSIFICATION
+  CHANGE_DETECTION
+  TERRAIN_ANALYSIS
+  FOREST_METRICS
+}
+
+enum AnalysisStatus {
+  PENDING     // Queued for processing
+  PROCESSING  // Currently running
+  COMPLETED   // Successfully completed
+  FAILED      // Processing failed
+  CANCELLED   // Cancelled by user
+}
+
+// Junction table for Analysis-File many-to-many relationship
+model AnalysisFile {
+  id         String   @id @default(uuid())
+  analysisId String   @map("analysis_id")
+  analysis   Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  fileId     String   @map("file_id")
+  file       File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@unique([analysisId, fileId])
+  @@index([analysisId])
+  @@index([fileId])
+  @@map("analysis_files")
+}
+
+// Result files generated by analyses
+model ResultFile {
+  id          String   @id @default(uuid())
+  name        String
+  storagePath String   @map("storage_path")
+  mimeType    String   @map("mime_type")
+  size        BigInt
+  fileType    String   @map("file_type") // e.g., "geojson", "geotiff", "csv", "pdf"
+
+  // Relation
+  analysisId  String   @map("analysis_id")
+  analysis    Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([analysisId])
+  @@map("result_files")
+}
+
+// ============================================================================
+// Job Queue Tracking (optional - for BullMQ job status persistence)
+// ============================================================================
+
+model JobLog {
+  id          String    @id @default(uuid())
+  jobId       String    @map("job_id")
+  queueName   String    @map("queue_name")
+  jobType     String    @map("job_type")
+  status      JobStatus
+  data        Json?
+  result      Json?
+  error       String?
+  attempts    Int       @default(0)
+
+  // Timing
+  createdAt   DateTime  @default(now()) @map("created_at")
+  startedAt   DateTime? @map("started_at")
+  completedAt DateTime? @map("completed_at")
+
+  @@index([jobId])
+  @@index([queueName])
+  @@index([status])
+  @@map("job_logs")
+}
+
+enum JobStatus {
+  PENDING
+  ACTIVE
+  COMPLETED
+  FAILED
+  DELAYED
+  PAUSED
+}
