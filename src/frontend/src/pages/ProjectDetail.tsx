@@ -1,7 +1,14 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useProjectStore } from '../store/projectStore';
+import { useProcessingStore } from '../store/processingStore';
 import { FileUploader } from '../components/FileUploader';
+import {
+  ProcessingProgress,
+  ProcessingResults,
+  DEFAULT_STAGES,
+} from '../components/ProcessingStatus';
+import type { StageInfo, StageType } from '../components/ProcessingStatus';
 import type { ProjectStatus, Analysis } from '../types';
 
 // Tab types
@@ -124,6 +131,7 @@ function ProjectDetail() {
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [analysisType, setAnalysisType] = useState<Analysis['type']>('tree_detection');
   const [showUploader, setShowUploader] = useState(false);
+  const [selectedAnalysisId, setSelectedAnalysisId] = useState<string | null>(null);
 
   const {
     currentProject,
@@ -145,6 +153,44 @@ function ProjectDetail() {
     clearErrors,
   } = useProjectStore();
 
+  const {
+    jobs,
+    isCancelling,
+    isDownloadingReport,
+    startPolling,
+    cancelProcessing,
+    downloadReport,
+    clearAllJobs,
+  } = useProcessingStore();
+
+  // Get the currently selected job for viewing progress/results
+  const selectedJob = selectedAnalysisId ? jobs[selectedAnalysisId] : null;
+
+  // Convert API progress to component StageInfo format
+  const stageInfoFromProgress = useMemo((): StageInfo[] => {
+    if (!selectedJob?.progress?.stages) {
+      // Return default pending stages
+      return DEFAULT_STAGES.map((type) => ({
+        type,
+        status: 'pending' as const,
+      }));
+    }
+
+    return selectedJob.progress.stages.map((stage) => {
+      const info: StageInfo = {
+        type: stage.type as StageType,
+        status: stage.status,
+      };
+      if (stage.progress !== undefined) {
+        info.progress = stage.progress;
+      }
+      if (stage.duration !== undefined) {
+        info.duration = stage.duration;
+      }
+      return info;
+    });
+  }, [selectedJob?.progress?.stages]);
+
   // Fetch project on mount
   useEffect(() => {
     if (id) {
@@ -156,8 +202,24 @@ function ProjectDetail() {
     return () => {
       clearCurrentProject();
       clearErrors();
+      clearAllJobs();
     };
-  }, [id, fetchProject, fetchProjectFiles, fetchProjectAnalyses, clearCurrentProject, clearErrors]);
+  }, [id, fetchProject, fetchProjectFiles, fetchProjectAnalyses, clearCurrentProject, clearErrors, clearAllJobs]);
+
+  // Auto-start polling for processing analyses
+  useEffect(() => {
+    if (!id) return;
+
+    const processingAnalyses = projectAnalyses.filter(
+      (a) => a.status === 'processing' || a.status === 'queued'
+    );
+
+    processingAnalyses.forEach((analysis) => {
+      if (!jobs[analysis.id]) {
+        startPolling(analysis.id, id);
+      }
+    });
+  }, [id, projectAnalyses, jobs, startPolling]);
 
   // Update URL when tab changes
   useEffect(() => {
@@ -213,10 +275,43 @@ function ProjectDetail() {
     if (!id) return;
 
     try {
-      await startAnalysis(id, analysisType);
+      const analysis = await startAnalysis(id, analysisType);
+      // Start polling for the new analysis
+      startPolling(analysis.id, id);
+      setSelectedAnalysisId(analysis.id);
     } catch {
       // Error handled in store
     }
+  };
+
+  const handleCancelProcessing = async (analysisId: string) => {
+    try {
+      await cancelProcessing(analysisId);
+      // Refresh analyses list
+      if (id) {
+        fetchProjectAnalyses(id);
+      }
+    } catch {
+      // Error handled in store
+    }
+  };
+
+  const handleViewResults = (analysisId: string) => {
+    setSelectedAnalysisId(analysisId);
+    // Could also navigate to a dedicated results page
+    // navigate(`/projects/${id}/analyses/${analysisId}`);
+  };
+
+  const handleDownloadReport = async (analysisId: string) => {
+    try {
+      await downloadReport(analysisId, 'pdf');
+    } catch {
+      // Error handled in store
+    }
+  };
+
+  const handleCloseProcessingView = () => {
+    setSelectedAnalysisId(null);
   };
 
   // Loading state
@@ -513,93 +608,215 @@ function ProjectDetail() {
         {/* Analyses Tab */}
         {activeTab === 'analyses' && (
           <div className="p-6">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-semibold text-gray-900">Analyses</h2>
-              <div className="flex items-center space-x-3">
-                <select
-                  value={analysisType}
-                  onChange={(e) => setAnalysisType(e.target.value as Analysis['type'])}
-                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-forest-500"
-                >
-                  <option value="tree_detection">Tree Detection</option>
-                  <option value="species_classification">Species Classification</option>
-                  <option value="biomass">Biomass Estimation</option>
-                  <option value="carbon">Carbon Analysis</option>
-                  <option value="full_inventory">Full Inventory</option>
-                </select>
-                <button
-                  onClick={handleStartAnalysis}
-                  disabled={projectFiles.length === 0}
-                  className="inline-flex items-center px-4 py-2 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-forest-600 hover:bg-forest-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <svg className="w-5 h-5 mr-2 -ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  Start Analysis
-                </button>
-              </div>
-            </div>
+            {/* Selected Analysis Detail View */}
+            {selectedAnalysisId && selectedJob && (
+              <div className="mb-6">
+                <div className="flex items-center justify-between mb-4">
+                  <button
+                    onClick={handleCloseProcessingView}
+                    className="inline-flex items-center text-sm font-medium text-gray-500 hover:text-gray-700"
+                  >
+                    <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                    Back to Analyses
+                  </button>
+                </div>
 
-            {isLoadingAnalyses ? (
-              <div className="flex justify-center py-12">
-                <svg className="animate-spin h-6 w-6 text-forest-600" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-              </div>
-            ) : projectAnalyses.length === 0 ? (
-              <div className="text-center py-12">
-                <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                </svg>
-                <h3 className="mt-2 text-sm font-medium text-gray-900">No analyses</h3>
-                <p className="mt-1 text-sm text-gray-500">Start an analysis to process your LiDAR data.</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {projectAnalyses.map((analysis) => (
-                  <div key={analysis.id} className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="flex items-center space-x-3">
-                          <h3 className="text-sm font-medium text-gray-900">
-                            {analysis.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                          </h3>
-                          <AnalysisStatusBadge status={analysis.status} />
-                        </div>
-                        {analysis.startedAt && (
-                          <p className="mt-1 text-xs text-gray-500">
-                            Started {formatDate(analysis.startedAt)}
-                          </p>
-                        )}
+                {/* Show ProcessingProgress for processing/queued analyses */}
+                {(selectedJob.progress?.status === 'processing' ||
+                  selectedJob.progress?.status === 'queued') && (
+                  <ProcessingProgress
+                    analysisId={selectedAnalysisId}
+                    stages={stageInfoFromProgress}
+                    {...(selectedJob.progress?.currentStageProgress !== undefined
+                      ? { currentStageProgress: selectedJob.progress.currentStageProgress }
+                      : {})}
+                    {...(selectedJob.progress?.estimatedTimeRemaining !== undefined
+                      ? { estimatedTimeRemaining: selectedJob.progress.estimatedTimeRemaining }
+                      : {})}
+                    onCancel={() => handleCancelProcessing(selectedAnalysisId)}
+                    isCancelling={isCancelling[selectedAnalysisId] ?? false}
+                  />
+                )}
+
+                {/* Show ProcessingResults for completed analyses */}
+                {selectedJob.progress?.status === 'completed' && selectedJob.results && (
+                  <ProcessingResults
+                    results={{
+                      treeCount: selectedJob.results.treeCount,
+                      averageHeight: selectedJob.results.averageHeight,
+                      maxHeight: selectedJob.results.maxHeight,
+                      canopyCoverage: selectedJob.results.canopyCoverage,
+                      processingTimeSeconds: selectedJob.results.processingTimeSeconds,
+                      analysisId: selectedAnalysisId,
+                      completedAt: selectedJob.results.completedAt,
+                    }}
+                    onViewFullResults={() => {
+                      // Navigate to detailed results page (future implementation)
+                      console.log('View full results for', selectedAnalysisId);
+                    }}
+                    onDownloadReport={() => handleDownloadReport(selectedAnalysisId)}
+                    isDownloading={isDownloadingReport[selectedAnalysisId] ?? false}
+                  />
+                )}
+
+                {/* Show error state for failed analyses */}
+                {selectedJob.progress?.status === 'failed' && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-6">
+                    <div className="flex items-start gap-3">
+                      <div className="p-2 bg-red-100 rounded-lg">
+                        <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
                       </div>
-                      {analysis.status === 'processing' && (
-                        <div className="w-32">
-                          <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
-                            <span>Progress</span>
-                            <span>{analysis.progress}%</span>
-                          </div>
-                          <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-forest-600 transition-all duration-300"
-                              style={{ width: `${analysis.progress}%` }}
-                            />
-                          </div>
-                        </div>
-                      )}
-                      {analysis.status === 'completed' && (
-                        <button className="text-sm font-medium text-forest-600 hover:text-forest-500">
-                          View Results
+                      <div>
+                        <h3 className="text-sm font-semibold text-red-800">Analysis Failed</h3>
+                        <p className="text-sm text-red-700 mt-1">
+                          {selectedJob.progress?.error || 'An unexpected error occurred during processing.'}
+                        </p>
+                        <button
+                          onClick={handleCloseProcessingView}
+                          className="mt-4 inline-flex items-center px-3 py-1.5 text-xs font-medium text-red-600 bg-white border border-red-200 rounded-lg hover:bg-red-50"
+                        >
+                          View All Analyses
                         </button>
-                      )}
+                      </div>
                     </div>
-                    {analysis.error && (
-                      <p className="mt-2 text-sm text-red-600">{analysis.error}</p>
-                    )}
                   </div>
-                ))}
+                )}
               </div>
+            )}
+
+            {/* Analysis List View */}
+            {!selectedAnalysisId && (
+              <>
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-lg font-semibold text-gray-900">Analyses</h2>
+                  <div className="flex items-center space-x-3">
+                    <select
+                      value={analysisType}
+                      onChange={(e) => setAnalysisType(e.target.value as Analysis['type'])}
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-forest-500"
+                    >
+                      <option value="tree_detection">Tree Detection</option>
+                      <option value="species_classification">Species Classification</option>
+                      <option value="biomass">Biomass Estimation</option>
+                      <option value="carbon">Carbon Analysis</option>
+                      <option value="full_inventory">Full Inventory</option>
+                    </select>
+                    <button
+                      onClick={handleStartAnalysis}
+                      disabled={projectFiles.length === 0}
+                      className="inline-flex items-center px-4 py-2 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-forest-600 hover:bg-forest-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <svg className="w-5 h-5 mr-2 -ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Start Analysis
+                    </button>
+                  </div>
+                </div>
+
+                {isLoadingAnalyses ? (
+                  <div className="flex justify-center py-12">
+                    <svg className="animate-spin h-6 w-6 text-forest-600" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                  </div>
+                ) : projectAnalyses.length === 0 ? (
+                  <div className="text-center py-12">
+                    <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                    <h3 className="mt-2 text-sm font-medium text-gray-900">No analyses</h3>
+                    <p className="mt-1 text-sm text-gray-500">Start an analysis to process your LiDAR data.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {projectAnalyses.map((analysis) => {
+                      const job = jobs[analysis.id];
+                      const isProcessing = analysis.status === 'processing' || analysis.status === 'queued';
+                      const jobProgress = job?.progress?.overallProgress ?? analysis.progress;
+
+                      return (
+                        <div
+                          key={analysis.id}
+                          className={`border rounded-lg p-4 transition-all cursor-pointer ${
+                            isProcessing
+                              ? 'border-forest-200 bg-forest-50 hover:bg-forest-100'
+                              : analysis.status === 'completed'
+                              ? 'border-green-200 bg-green-50 hover:bg-green-100'
+                              : analysis.status === 'failed'
+                              ? 'border-red-200 bg-red-50 hover:bg-red-100'
+                              : 'border-gray-200 hover:bg-gray-50'
+                          }`}
+                          onClick={() => handleViewResults(analysis.id)}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1">
+                              <div className="flex items-center space-x-3">
+                                <h3 className="text-sm font-medium text-gray-900">
+                                  {analysis.type.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
+                                </h3>
+                                <AnalysisStatusBadge status={analysis.status} />
+                              </div>
+                              {analysis.startedAt && (
+                                <p className="mt-1 text-xs text-gray-500">
+                                  Started {formatDate(analysis.startedAt)}
+                                </p>
+                              )}
+                            </div>
+
+                            {/* Progress indicator for processing */}
+                            {isProcessing && (
+                              <div className="w-40 mr-4">
+                                <div className="flex items-center justify-between text-xs text-forest-700 mb-1">
+                                  <span className="font-medium">Processing</span>
+                                  <span>{jobProgress}%</span>
+                                </div>
+                                <div className="h-2 bg-forest-200 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-forest-600 transition-all duration-300 rounded-full"
+                                    style={{ width: `${jobProgress}%` }}
+                                  />
+                                </div>
+                              </div>
+                            )}
+
+                            {/* View button */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleViewResults(analysis.id);
+                              }}
+                              className={`text-sm font-medium px-3 py-1.5 rounded-lg transition-colors ${
+                                analysis.status === 'completed'
+                                  ? 'text-forest-600 hover:bg-forest-100'
+                                  : analysis.status === 'failed'
+                                  ? 'text-red-600 hover:bg-red-100'
+                                  : 'text-gray-600 hover:bg-gray-100'
+                              }`}
+                            >
+                              {analysis.status === 'completed'
+                                ? 'View Results'
+                                : analysis.status === 'failed'
+                                ? 'View Error'
+                                : 'View Progress'}
+                            </button>
+                          </div>
+
+                          {analysis.error && (
+                            <p className="mt-2 text-sm text-red-600">{analysis.error}</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

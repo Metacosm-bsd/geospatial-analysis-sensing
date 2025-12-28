@@ -183,6 +183,9 @@ model Analysis {
   progressMessage String?      @map("progress_message")
   errorMessage  String?        @map("error_message")
 
+  // Processing stage tracking (Sprint 7-8)
+  processingStage ProcessingStage @default(QUEUED) @map("processing_stage")
+
   // Spatial bounds for analysis area
   bounds        Json?          // GeoJSON Polygon/MultiPolygon
 
@@ -231,6 +234,17 @@ enum AnalysisStatus {
   COMPLETED   // Successfully completed
   FAILED      // Processing failed
   CANCELLED   // Cancelled by user
+}
+
+// Processing stage enum for detailed pipeline tracking (Sprint 7-8)
+enum ProcessingStage {
+  QUEUED                  // Waiting in queue
+  GROUND_CLASSIFICATION   // Ground point classification stage
+  HEIGHT_NORMALIZATION    // Height normalization stage
+  TREE_DETECTION          // Tree detection stage
+  METRICS_EXTRACTION      // Metrics extraction stage
+  COMPLETED               // Processing completed
+  FAILED                  // Processing failed
 }
 
 // Junction table for Analysis-File many-to-many relationship

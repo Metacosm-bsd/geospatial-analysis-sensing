@@ -22,14 +22,19 @@ import redis
 
 from lidar_processing.config import Settings, configure_logging, get_settings
 from lidar_processing.models import (
+    GroundClassificationParams,
+    HeightNormalizationParams,
     JobResult,
     JobStatus,
     JobType,
     LidarMetadata,
+    ProcessingResult,
+    TreeDetectionParams,
     ValidationResult,
 )
 from lidar_processing.services.lidar_validator import LidarValidator
 from lidar_processing.services.metadata_extractor import MetadataExtractor
+from lidar_processing.workers.processing_worker import ProcessingWorker
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +66,7 @@ class QueueWorker:
         self.redis_client: redis.Redis | None = None
         self.validator = LidarValidator(self.settings)
         self.extractor = MetadataExtractor(self.settings)
+        self.processing_worker = ProcessingWorker(self.settings)
         self.running = False
         self._http_client: httpx.Client | None = None
 
@@ -69,6 +75,10 @@ class QueueWorker:
             JobType.VALIDATE: self._handle_validate,
             JobType.EXTRACT_METADATA: self._handle_extract_metadata,
             JobType.VALIDATE_AND_EXTRACT: self._handle_validate_and_extract,
+            JobType.GROUND_CLASSIFY: self._handle_ground_classify,
+            JobType.NORMALIZE_HEIGHT: self._handle_normalize_height,
+            JobType.DETECT_TREES: self._handle_detect_trees,
+            JobType.FULL_PIPELINE: self._handle_full_pipeline,
         }
 
     def connect(self) -> None:
@@ -379,6 +389,132 @@ class QueueWorker:
             processing_time_ms=processing_time_ms,
             validation_result=validation_result,
             metadata=metadata,
+        )
+
+    def _handle_ground_classify(
+        self,
+        job_id: str,
+        file_path: str,
+        job_type: JobType,
+        queued_at: str,
+        start_time: float,
+        params: dict[str, Any],
+    ) -> JobResult:
+        """
+        Handle ground classification job.
+
+        Args:
+            job_id: Unique job identifier.
+            file_path: Path to the LAS/LAZ file.
+            job_type: Type of job.
+            queued_at: When the job was queued.
+            start_time: Processing start time.
+            params: Additional parameters.
+
+        Returns:
+            JobResult with classification results.
+        """
+        return self.processing_worker.process_job(
+            job_type=job_type,
+            file_path=file_path,
+            job_id=job_id,
+            params=params,
+            output_dir=params.get("output_dir"),
+        )
+
+    def _handle_normalize_height(
+        self,
+        job_id: str,
+        file_path: str,
+        job_type: JobType,
+        queued_at: str,
+        start_time: float,
+        params: dict[str, Any],
+    ) -> JobResult:
+        """
+        Handle height normalization job.
+
+        Args:
+            job_id: Unique job identifier.
+            file_path: Path to the LAS/LAZ file.
+            job_type: Type of job.
+            queued_at: When the job was queued.
+            start_time: Processing start time.
+            params: Additional parameters.
+
+        Returns:
+            JobResult with normalization results.
+        """
+        return self.processing_worker.process_job(
+            job_type=job_type,
+            file_path=file_path,
+            job_id=job_id,
+            params=params,
+            output_dir=params.get("output_dir"),
+        )
+
+    def _handle_detect_trees(
+        self,
+        job_id: str,
+        file_path: str,
+        job_type: JobType,
+        queued_at: str,
+        start_time: float,
+        params: dict[str, Any],
+    ) -> JobResult:
+        """
+        Handle tree detection job.
+
+        Args:
+            job_id: Unique job identifier.
+            file_path: Path to the LAS/LAZ file.
+            job_type: Type of job.
+            queued_at: When the job was queued.
+            start_time: Processing start time.
+            params: Additional parameters.
+
+        Returns:
+            JobResult with tree detection results.
+        """
+        return self.processing_worker.process_job(
+            job_type=job_type,
+            file_path=file_path,
+            job_id=job_id,
+            params=params,
+            output_dir=params.get("output_dir"),
+        )
+
+    def _handle_full_pipeline(
+        self,
+        job_id: str,
+        file_path: str,
+        job_type: JobType,
+        queued_at: str,
+        start_time: float,
+        params: dict[str, Any],
+    ) -> JobResult:
+        """
+        Handle full processing pipeline job.
+
+        Runs ground classification, height normalization, and tree detection.
+
+        Args:
+            job_id: Unique job identifier.
+            file_path: Path to the LAS/LAZ file.
+            job_type: Type of job.
+            queued_at: When the job was queued.
+            start_time: Processing start time.
+            params: Additional parameters.
+
+        Returns:
+            JobResult with full pipeline results.
+        """
+        return self.processing_worker.process_job(
+            job_type=job_type,
+            file_path=file_path,
+            job_id=job_id,
+            params=params,
+            output_dir=params.get("output_dir"),
         )
 
     def _store_result(self, job_id: str, result: JobResult) -> None:

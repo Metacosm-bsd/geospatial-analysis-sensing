@@ -42,3 +42,17 @@ export {
   getUploadProgress,
   getDownloadUrl,
 } from './files';
+
+// Processing API
+export {
+  getProcessingProgress,
+  cancelProcessing,
+  getProcessingResults,
+  getReportDownloadUrl,
+  generateReport,
+} from './processing';
+export type {
+  ProcessingStageInfo,
+  ProcessingProgress,
+  ProcessingResultsResponse,
+} from './processing';

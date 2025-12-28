@@ -1,6 +1,8 @@
 import { Router, type Request, type Response } from 'express';
 import { body, param, query, validationResult } from 'express-validator';
 import { authenticateToken } from '../middleware/auth.js';
+import * as processingService from '../services/processing.service.js';
+import type { PipelineParameters } from '../types/processing.js';
 
 const router = Router();
 
@@ -159,55 +161,266 @@ router.get(
   }
 );
 
-// GET /api/v1/analyses/:id/results
+// GET /api/v1/analyses/:id/progress - Get real-time processing progress
+router.get(
+  '/:id/progress',
+  [param('id').isUUID().withMessage('Invalid analysis ID')],
+  async (req: Request, res: Response) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ errors: errors.array() });
+      return;
+    }
+
+    try {
+      const analysisId = req.params.id as string;
+
+      // Get processing progress
+      const progress = await processingService.getProcessingProgress(analysisId);
+
+      if (!progress) {
+        res.status(404).json({
+          success: false,
+          error: 'Analysis not found',
+        });
+        return;
+      }
+
+      res.json({
+        success: true,
+        data: progress,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({
+        success: false,
+        error: errorMessage,
+      });
+    }
+  }
+);
+
+// GET /api/v1/analyses/:id/results - Get processing results
 router.get(
   '/:id/results',
   [
     param('id').isUUID().withMessage('Invalid analysis ID'),
     query('format').optional().isIn(['json', 'geojson', 'csv']).withMessage('Format must be json, geojson, or csv'),
   ],
-  (req: Request, res: Response) => {
+  async (req: Request, res: Response) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       res.status(400).json({ errors: errors.array() });
       return;
     }
 
-    // TODO: Implement get analysis results
-    // - Verify analysis is completed
-    // - Return results in requested format
-    // - Support GeoJSON for spatial data
+    try {
+      const analysisId = req.params.id as string;
+      const format = (req.query.format as string) ?? 'json';
 
-    res.status(501).json({
-      message: 'Get analysis results endpoint - implementation pending',
-      analysisId: req.params.id,
-      userId: req.user?.id,
-      format: req.query.format ?? 'json',
-    });
+      // Get processing results
+      const results = await processingService.getProcessingResults(analysisId);
+
+      if (!results) {
+        // Check if analysis exists but has no results yet
+        const progress = await processingService.getProcessingProgress(analysisId);
+
+        if (!progress) {
+          res.status(404).json({
+            success: false,
+            error: 'Analysis not found',
+          });
+          return;
+        }
+
+        if (progress.stage !== 'completed') {
+          res.status(202).json({
+            success: false,
+            error: 'Analysis is still processing',
+            progress: {
+              stage: progress.stage,
+              progress: progress.progress,
+              message: progress.message,
+            },
+          });
+          return;
+        }
+
+        res.status(404).json({
+          success: false,
+          error: 'Results not available',
+        });
+        return;
+      }
+
+      // Format results based on requested format
+      if (format === 'json') {
+        res.json({
+          success: true,
+          data: results,
+        });
+      } else if (format === 'geojson') {
+        // Convert results to GeoJSON format
+        res.json({
+          type: 'FeatureCollection',
+          features: [],
+          properties: {
+            analysisId,
+            ...results,
+          },
+        });
+      } else if (format === 'csv') {
+        // Convert results to CSV format
+        const csvLines = [
+          'metric,value',
+          `treeCount,${results.treeCount ?? ''}`,
+          `averageHeight,${results.averageHeight ?? ''}`,
+          `maxHeight,${results.maxHeight ?? ''}`,
+          `minHeight,${results.minHeight ?? ''}`,
+          `canopyArea,${results.canopyArea ?? ''}`,
+          `canopyCoverPercent,${results.canopyCoverPercent ?? ''}`,
+          `processingTime,${results.processingTime ?? ''}`,
+        ];
+
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename="analysis-${analysisId}-results.csv"`);
+        res.send(csvLines.join('\n'));
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({
+        success: false,
+        error: errorMessage,
+      });
+    }
   }
 );
 
-// POST /api/v1/analyses/:id/cancel
+// POST /api/v1/analyses/:id/cancel - Cancel processing job
 router.post(
   '/:id/cancel',
   [param('id').isUUID().withMessage('Invalid analysis ID')],
-  (req: Request, res: Response) => {
+  async (req: Request, res: Response) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       res.status(400).json({ errors: errors.array() });
       return;
     }
 
-    // TODO: Implement cancel analysis
-    // - Verify user owns analysis
-    // - Cancel processing job if running
-    // - Update analysis status
+    try {
+      const analysisId = req.params.id as string;
 
-    res.status(501).json({
-      message: 'Cancel analysis endpoint - implementation pending',
-      analysisId: req.params.id,
-      userId: req.user?.id,
-    });
+      // Check if analysis exists and is still processing
+      const progress = await processingService.getProcessingProgress(analysisId);
+
+      if (!progress) {
+        res.status(404).json({
+          success: false,
+          error: 'Analysis not found',
+        });
+        return;
+      }
+
+      if (progress.stage === 'completed' || progress.stage === 'failed') {
+        res.status(400).json({
+          success: false,
+          error: `Cannot cancel analysis that is already ${progress.stage}`,
+        });
+        return;
+      }
+
+      // Cancel the processing
+      const cancelled = await processingService.cancelProcessing(analysisId);
+
+      if (cancelled) {
+        res.json({
+          success: true,
+          message: 'Processing cancelled successfully',
+          data: {
+            analysisId,
+            stage: 'failed',
+            message: 'Processing cancelled by user',
+          },
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          error: 'Failed to cancel processing',
+        });
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({
+        success: false,
+        error: errorMessage,
+      });
+    }
+  }
+);
+
+// POST /api/v1/analyses/:id/start - Start processing pipeline
+router.post(
+  '/:id/start',
+  [
+    param('id').isUUID().withMessage('Invalid analysis ID'),
+    body('fileIds')
+      .isArray({ min: 1 })
+      .withMessage('At least one file ID is required')
+      .custom((value: unknown[]) => {
+        if (!value.every((id) => typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id))) {
+          throw new Error('All file IDs must be valid UUIDs');
+        }
+        return true;
+      }),
+    body('parameters').optional().isObject().withMessage('Parameters must be an object'),
+  ],
+  async (req: Request, res: Response) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ errors: errors.array() });
+      return;
+    }
+
+    try {
+      const analysisId = req.params.id as string;
+      const fileIds: string[] = req.body.fileIds;
+      const parameters: PipelineParameters = req.body.parameters ?? {};
+      const userId = req.user?.id;
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'User not authenticated',
+        });
+        return;
+      }
+
+      // Start the processing pipeline
+      const jobId = await processingService.startProcessingPipeline(
+        analysisId,
+        fileIds,
+        parameters,
+        userId
+      );
+
+      res.json({
+        success: true,
+        message: 'Processing pipeline started',
+        data: {
+          analysisId,
+          jobId,
+          stage: 'queued',
+          progress: 0,
+          message: 'Processing job queued',
+        },
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({
+        success: false,
+        error: errorMessage,
+      });
+    }
   }
 );
 
@@ -264,6 +477,46 @@ router.post(
         includeVisualizations: req.body.includeVisualizations ?? false,
       },
     });
+  }
+);
+
+// POST /api/v1/analyses/callback - Handle progress callback from Python service
+router.post(
+  '/callback',
+  [
+    body('analysisId').isUUID().withMessage('Invalid analysis ID'),
+    body('stage').isString().withMessage('Stage is required'),
+    body('progress').isFloat({ min: 0, max: 100 }).withMessage('Progress must be between 0 and 100'),
+    body('message').isString().withMessage('Message is required'),
+    body('intermediateResults').optional().isObject(),
+  ],
+  async (req: Request, res: Response) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ errors: errors.array() });
+      return;
+    }
+
+    try {
+      await processingService.handleProgressCallback({
+        analysisId: req.body.analysisId,
+        stage: req.body.stage,
+        progress: req.body.progress,
+        message: req.body.message,
+        intermediateResults: req.body.intermediateResults,
+      });
+
+      res.json({
+        success: true,
+        message: 'Progress updated',
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({
+        success: false,
+        error: errorMessage,
+      });
+    }
   }
 );
 

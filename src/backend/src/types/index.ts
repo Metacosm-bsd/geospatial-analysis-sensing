@@ -177,3 +177,6 @@ export interface JobResult {
 
 // Re-export DTOs
 export * from './dto.js';
+
+// Re-export processing types (Sprint 7-8)
+export * from './processing.js';

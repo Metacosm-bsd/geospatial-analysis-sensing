@@ -45,6 +45,10 @@ class JobType(str, Enum):
     VALIDATE = "validate"
     EXTRACT_METADATA = "extract_metadata"
     VALIDATE_AND_EXTRACT = "validate_and_extract"
+    GROUND_CLASSIFY = "ground_classify"
+    NORMALIZE_HEIGHT = "normalize_height"
+    DETECT_TREES = "detect_trees"
+    FULL_PIPELINE = "full_pipeline"
 
 
 # ============================================================================
@@ -379,6 +383,211 @@ class ErrorResponse(BaseModel):
     timestamp: datetime = Field(
         default_factory=datetime.utcnow, description="Error timestamp"
     )
+
+
+# ============================================================================
+# LiDAR Processing Parameter Models
+# ============================================================================
+
+
+class GroundClassificationParams(BaseModel):
+    """Parameters for ground point classification."""
+
+    cell_size: float = Field(
+        default=1.0,
+        description="Cell size for morphological operations in meters",
+        gt=0,
+    )
+    slope: float = Field(
+        default=0.15,
+        description="Maximum slope threshold (height change per unit distance)",
+        ge=0,
+        le=1.0,
+    )
+    max_window_size: float = Field(
+        default=33.0,
+        description="Maximum window size for morphological filter in meters",
+        gt=0,
+    )
+    initial_distance: float = Field(
+        default=0.5,
+        description="Initial height threshold for ground points",
+        gt=0,
+    )
+    max_distance: float = Field(
+        default=3.0,
+        description="Maximum height threshold for ground points",
+        gt=0,
+    )
+
+
+class TreeDetectionParams(BaseModel):
+    """Parameters for individual tree detection."""
+
+    min_height: float = Field(
+        default=2.0,
+        description="Minimum tree height to detect in meters",
+        gt=0,
+    )
+    min_distance: float = Field(
+        default=3.0,
+        description="Minimum distance between detected tree tops in meters",
+        gt=0,
+    )
+    smoothing_sigma: float = Field(
+        default=1.0,
+        description="Gaussian smoothing sigma for CHM before detection",
+        ge=0,
+    )
+    resolution: float = Field(
+        default=1.0,
+        description="CHM resolution in meters",
+        gt=0,
+    )
+
+
+class HeightNormalizationParams(BaseModel):
+    """Parameters for height normalization and CHM generation."""
+
+    resolution: float = Field(
+        default=1.0,
+        description="Output raster resolution in meters",
+        gt=0,
+    )
+    interpolation_method: str = Field(
+        default="idw",
+        description="Interpolation method for DEM: 'idw' or 'tin'",
+    )
+    idw_power: float = Field(
+        default=2.0,
+        description="Power parameter for IDW interpolation",
+        gt=0,
+    )
+    search_radius: float | None = Field(
+        default=None,
+        description="Search radius for IDW interpolation in meters (None = auto)",
+    )
+
+
+# ============================================================================
+# LiDAR Processing Result Models
+# ============================================================================
+
+
+class GroundClassificationResult(BaseModel):
+    """Result of ground point classification."""
+
+    file_path: str = Field(..., description="Path to the input LAS file")
+    output_path: str | None = Field(
+        default=None, description="Path to output LAS file with classification"
+    )
+    total_points: int = Field(..., description="Total number of points processed")
+    ground_points: int = Field(..., description="Number of points classified as ground")
+    non_ground_points: int = Field(
+        ..., description="Number of points classified as non-ground"
+    )
+    ground_percentage: float = Field(
+        ..., description="Percentage of points classified as ground"
+    )
+    processing_time_ms: float = Field(..., description="Processing time in milliseconds")
+    params: GroundClassificationParams = Field(
+        ..., description="Parameters used for classification"
+    )
+
+
+class CHMResult(BaseModel):
+    """Result of CHM (Canopy Height Model) generation."""
+
+    file_path: str = Field(..., description="Path to the input LAS file")
+    chm_path: str | None = Field(default=None, description="Path to output CHM raster")
+    dem_path: str | None = Field(default=None, description="Path to output DEM raster")
+    resolution: float = Field(..., description="Output raster resolution in meters")
+    bounds: Bounds = Field(..., description="Spatial bounds of the output raster")
+    width: int = Field(..., description="Raster width in pixels")
+    height: int = Field(..., description="Raster height in pixels")
+    min_height: float = Field(..., description="Minimum normalized height value")
+    max_height: float = Field(..., description="Maximum normalized height value")
+    processing_time_ms: float = Field(..., description="Processing time in milliseconds")
+
+
+class TreeMetrics(BaseModel):
+    """Metrics for an individual detected tree."""
+
+    tree_id: int = Field(..., description="Unique tree identifier")
+    x: float = Field(..., description="Tree top X coordinate")
+    y: float = Field(..., description="Tree top Y coordinate")
+    height: float = Field(..., description="Tree height in meters")
+    crown_diameter: float | None = Field(
+        default=None, description="Crown diameter in meters"
+    )
+    crown_area: float | None = Field(
+        default=None, description="Crown area in square meters"
+    )
+    crown_base_height: float | None = Field(
+        default=None, description="Crown base height in meters"
+    )
+    dbh_estimated: float | None = Field(
+        default=None, description="Estimated DBH in centimeters (from allometry)"
+    )
+    biomass_estimated: float | None = Field(
+        default=None, description="Estimated above-ground biomass in kg"
+    )
+    point_count: int | None = Field(
+        default=None, description="Number of points in tree segment"
+    )
+
+
+class TreeDetectionResult(BaseModel):
+    """Result of tree detection processing."""
+
+    file_path: str = Field(..., description="Path to the input LAS file")
+    trees_detected: int = Field(..., description="Number of trees detected")
+    trees: list[TreeMetrics] = Field(
+        default_factory=list, description="List of detected trees with metrics"
+    )
+    chm_resolution: float = Field(..., description="CHM resolution used for detection")
+    params: TreeDetectionParams = Field(
+        ..., description="Parameters used for detection"
+    )
+    processing_time_ms: float = Field(..., description="Processing time in milliseconds")
+
+    @property
+    def average_height(self) -> float | None:
+        """Calculate average tree height."""
+        if not self.trees:
+            return None
+        return sum(t.height for t in self.trees) / len(self.trees)
+
+    @property
+    def max_tree_height(self) -> float | None:
+        """Get maximum tree height."""
+        if not self.trees:
+            return None
+        return max(t.height for t in self.trees)
+
+
+class ProcessingResult(BaseModel):
+    """Combined result from full LiDAR processing pipeline."""
+
+    file_path: str = Field(..., description="Path to the input LAS file")
+    job_id: str | None = Field(default=None, description="Associated job ID")
+    ground_classification: GroundClassificationResult | None = Field(
+        default=None, description="Ground classification results"
+    )
+    height_normalization: CHMResult | None = Field(
+        default=None, description="Height normalization/CHM results"
+    )
+    tree_detection: TreeDetectionResult | None = Field(
+        default=None, description="Tree detection results"
+    )
+    total_processing_time_ms: float = Field(
+        ..., description="Total processing time in milliseconds"
+    )
+    completed_at: datetime = Field(
+        default_factory=datetime.utcnow, description="Processing completion timestamp"
+    )
+    success: bool = Field(default=True, description="Whether processing succeeded")
+    error: str | None = Field(default=None, description="Error message if failed")
 
 
 # ============================================================================
