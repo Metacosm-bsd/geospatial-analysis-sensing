@@ -145,6 +145,21 @@ export const CompleteUploadDtoSchema = z.object({
 
 export type CompleteUploadDto = z.infer<typeof CompleteUploadDtoSchema>;
 
+export const InitMultipartUploadDtoSchema = z.object({
+  projectId: z.string().uuid('Valid project ID is required'),
+  filename: z.string().min(1, 'Filename is required').max(255),
+  size: z.number().positive('File size must be positive'),
+  mimeType: z.string().optional(),
+});
+
+export type InitMultipartUploadDto = z.infer<typeof InitMultipartUploadDtoSchema>;
+
+export const CompleteMultipartUploadDtoSchema = z.object({
+  checksum: z.string().optional(),
+});
+
+export type CompleteMultipartUploadDto = z.infer<typeof CompleteMultipartUploadDtoSchema>;
+
 // ============================================================================
 // Response Types
 // ============================================================================

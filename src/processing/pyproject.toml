@@ -32,6 +32,11 @@ dependencies = [
     "shapely>=2.0.0",
     "redis>=5.0.0",
     "pydantic>=2.0.0",
+    # LiDAR Processing Service (Sprint 5-6)
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "pydantic-settings>=2.1.0",
+    "httpx>=0.26.0",
 ]
 
 [project.optional-dependencies]
@@ -46,9 +51,11 @@ dev = [
 
 [project.scripts]
 lidar-worker = "processing.worker:main"
+lidar-api = "lidar_processing.main:main"
+lidar-queue-worker = "lidar_processing.workers.queue_worker:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/processing"]
+packages = ["src/processing", "src/lidar_processing"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -110,7 +117,7 @@ ignore = [
 "tests/*" = ["ARG"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["processing"]
+known-first-party = ["processing", "lidar_processing"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -130,5 +137,6 @@ module = [
     "rasterio.*",
     "shapely.*",
     "redis.*",
+    "httpx.*",
 ]
 ignore_missing_imports = true

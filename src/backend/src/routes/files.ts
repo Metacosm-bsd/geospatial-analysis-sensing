@@ -2,8 +2,14 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { z } from 'zod';
 import { authenticateToken } from '../middleware/auth.js';
 import { logger } from '../config/logger.js';
+import { config } from '../config/index.js';
 import * as fileService from '../services/file.service.js';
-import { CompleteUploadDtoSchema } from '../types/dto.js';
+import {
+  CompleteUploadDtoSchema,
+  InitMultipartUploadDtoSchema,
+  CompleteMultipartUploadDtoSchema,
+} from '../types/dto.js';
+import { getQueue, QUEUE_NAMES } from '../config/queue.js';
 
 const router = Router();
 
@@ -298,5 +304,368 @@ router.get('/types', (_req: Request, res: Response): void => {
     },
   });
 });
+
+// ============================================================================
+// Chunked Upload Endpoints
+// ============================================================================
+
+/**
+ * POST /api/v1/files/init-upload
+ * Initialize a multipart upload session
+ */
+router.post(
+  '/init-upload',
+  validateBody(InitMultipartUploadDtoSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { projectId, filename, size, mimeType } = req.body;
+      const userId = req.user?.id;
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+        });
+        return;
+      }
+
+      // Validate file type
+      if (!fileService.isAllowedFileType(filename)) {
+        res.status(400).json({
+          success: false,
+          error: 'Invalid file type',
+          message: `Unsupported file type. Allowed extensions: ${fileService.getSupportedExtensions().join(', ')}`,
+        });
+        return;
+      }
+
+      const session = await fileService.initMultipartUpload(projectId, filename, size, mimeType);
+
+      res.status(201).json({
+        success: true,
+        message: 'Upload session initialized',
+        data: {
+          fileId: session.fileId,
+          uploadId: session.uploadId,
+          storagePath: session.storagePath,
+          chunkSize: session.chunkSize,
+          totalChunks: session.totalChunks,
+          expiresAt: new Date(session.createdAt.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to initialize upload';
+      logger.error('Error initializing upload:', error);
+
+      if (message.includes('not found')) {
+        res.status(404).json({
+          success: false,
+          error: 'Project not found',
+          message: 'The specified project does not exist',
+        });
+        return;
+      }
+
+      if (message.includes('exceeds maximum')) {
+        res.status(400).json({
+          success: false,
+          error: 'File too large',
+          message: `File size exceeds maximum allowed (${config.storage.maxFileSize} bytes)`,
+        });
+        return;
+      }
+
+      res.status(500).json({
+        success: false,
+        error: 'Failed to initialize upload',
+        message: 'An error occurred while initializing the upload session',
+      });
+    }
+  }
+);
+
+/**
+ * PUT /api/v1/files/:fileId/chunks/:chunkIndex
+ * Upload a chunk of a file
+ */
+router.put(
+  '/:fileId/chunks/:chunkIndex',
+  validateUUID('fileId'),
+  verifyFileOwnership,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const fileId = req.params.fileId!;
+      const chunkIndex = parseInt(req.params.chunkIndex ?? '0', 10);
+
+      if (isNaN(chunkIndex) || chunkIndex < 0) {
+        res.status(400).json({
+          success: false,
+          error: 'Invalid chunk index',
+          message: 'Chunk index must be a non-negative integer',
+        });
+        return;
+      }
+
+      // Collect the raw body as buffer
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
+      }
+      const data = Buffer.concat(chunks);
+
+      if (data.length === 0) {
+        res.status(400).json({
+          success: false,
+          error: 'Empty chunk',
+          message: 'Chunk data is required',
+        });
+        return;
+      }
+
+      const result = await fileService.uploadChunk(fileId, chunkIndex, data);
+
+      res.status(200).json({
+        success: true,
+        message: 'Chunk uploaded successfully',
+        data: {
+          partNumber: result.partNumber,
+          eTag: result.eTag,
+          uploadedChunks: result.uploadedChunks,
+          totalChunks: result.totalChunks,
+          progress: result.progress,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Chunk upload failed';
+      logger.error('Error uploading chunk:', error);
+
+      if (message.includes('session not found')) {
+        res.status(404).json({
+          success: false,
+          error: 'Upload session not found',
+          message: 'The upload session may have expired or does not exist',
+        });
+        return;
+      }
+
+      if (message.includes('Invalid chunk index')) {
+        res.status(400).json({
+          success: false,
+          error: 'Invalid chunk index',
+          message,
+        });
+        return;
+      }
+
+      res.status(500).json({
+        success: false,
+        error: 'Failed to upload chunk',
+        message: 'An error occurred while uploading the chunk',
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/files/:fileId/complete
+ * Complete a multipart upload
+ */
+router.post(
+  '/:fileId/complete',
+  validateUUID('fileId'),
+  verifyFileOwnership,
+  validateBody(CompleteMultipartUploadDtoSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const fileId = req.params.fileId!;
+      const { checksum } = req.body;
+
+      const file = await fileService.completeMultipartUpload(fileId, checksum);
+
+      // Queue file for processing
+      try {
+        const queue = getQueue(QUEUE_NAMES.FILE_UPLOAD);
+        await queue.add('process-file', {
+          fileId: file.id,
+          storagePath: file.storagePath,
+          fileType: file.fileType,
+          projectId: file.projectId,
+        });
+        logger.info(`File ${fileId} queued for processing`);
+      } catch (queueError) {
+        logger.error('Failed to queue file for processing:', queueError);
+        // Continue anyway - file is uploaded, processing can be retried
+      }
+
+      // Convert BigInt to string for JSON serialization
+      const serializedFile = {
+        ...file,
+        size: file.size.toString(),
+        pointCount: file.pointCount?.toString() ?? null,
+      };
+
+      res.status(200).json({
+        success: true,
+        message: 'Upload completed successfully',
+        data: serializedFile,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Upload completion failed';
+      logger.error('Error completing upload:', error);
+
+      if (message.includes('session not found')) {
+        res.status(404).json({
+          success: false,
+          error: 'Upload session not found',
+          message: 'The upload session may have expired or does not exist',
+        });
+        return;
+      }
+
+      if (message.includes('Missing chunks')) {
+        res.status(400).json({
+          success: false,
+          error: 'Incomplete upload',
+          message,
+        });
+        return;
+      }
+
+      res.status(500).json({
+        success: false,
+        error: 'Failed to complete upload',
+        message: 'An error occurred while completing the upload',
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/files/:fileId/status
+ * Get upload progress/status
+ */
+router.get(
+  '/:fileId/status',
+  validateUUID('fileId'),
+  verifyFileOwnership,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const fileId = req.params.fileId!;
+
+      const status = await fileService.getUploadStatus(fileId);
+
+      if (!status) {
+        res.status(404).json({
+          success: false,
+          error: 'File not found',
+          message: 'The requested file does not exist',
+        });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        data: status,
+      });
+    } catch (error) {
+      logger.error('Error getting upload status:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to get upload status',
+        message: 'An error occurred while fetching upload status',
+      });
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/files/:fileId/abort
+ * Abort an in-progress multipart upload
+ */
+router.delete(
+  '/:fileId/abort',
+  validateUUID('fileId'),
+  verifyFileOwnership,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const fileId = req.params.fileId!;
+
+      await fileService.abortMultipartUpload(fileId);
+
+      res.status(200).json({
+        success: true,
+        message: 'Upload aborted successfully',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Abort failed';
+      logger.error('Error aborting upload:', error);
+
+      if (message.includes('not found')) {
+        res.status(404).json({
+          success: false,
+          error: 'Upload not found',
+          message: 'The upload session does not exist',
+        });
+        return;
+      }
+
+      res.status(500).json({
+        success: false,
+        error: 'Failed to abort upload',
+        message: 'An error occurred while aborting the upload',
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/files/:fileId/download-stream
+ * Stream download a file
+ */
+router.get(
+  '/:fileId/download-stream',
+  validateUUID('fileId'),
+  verifyFileOwnership,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const fileId = req.params.fileId!;
+
+      const { stream, contentType, contentLength, filename } = await fileService.downloadFile(fileId);
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Length', contentLength);
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+
+      stream.pipe(res);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Download failed';
+      logger.error('Error downloading file:', error);
+
+      if (message.includes('not found')) {
+        res.status(404).json({
+          success: false,
+          error: 'File not found',
+          message: 'The requested file does not exist',
+        });
+        return;
+      }
+
+      if (message.includes('not ready')) {
+        res.status(400).json({
+          success: false,
+          error: 'File not ready',
+          message,
+        });
+        return;
+      }
+
+      res.status(500).json({
+        success: false,
+        error: 'Failed to download file',
+        message: 'An error occurred while downloading the file',
+      });
+    }
+  }
+);
 
 export default router;

@@ -28,3 +28,17 @@ export {
   startAnalysis,
   cancelAnalysis,
 } from './projects';
+
+// Files API
+export {
+  initUpload,
+  uploadChunk,
+  completeUpload,
+  getFileStatus,
+  deleteFile,
+  getProjectFiles as getFilesForProject,
+  getFile,
+  cancelUpload,
+  getUploadProgress,
+  getDownloadUrl,
+} from './files';

@@ -3,10 +3,13 @@
  */
 import path from 'path';
 import crypto from 'crypto';
+import { Readable } from 'stream';
 import { prisma } from '../config/database.js';
 import { config } from '../config/index.js';
 import { logger } from '../config/logger.js';
+import { getStorageAdapter } from './storage/index.js';
 import type { FileType, FileResponse } from '../types/dto.js';
+import type { CompletedPart } from './storage/storage.interface.js';
 
 // Type alias for JSON values since Prisma types may not be generated
 type JsonValue = string | number | boolean | null | { [key: string]: JsonValue } | JsonValue[];
@@ -45,6 +48,63 @@ interface UploadSession {
   mimeType: string;
   status: 'PENDING';
   createdAt: Date;
+}
+
+/**
+ * Multipart upload session info
+ */
+export interface MultipartUploadSession {
+  fileId: string;
+  uploadId: string;
+  storagePath: string;
+  projectId: string;
+  filename: string;
+  totalSize: number;
+  chunkSize: number;
+  totalChunks: number;
+  uploadedChunks: number[];
+  parts: CompletedPart[];
+  createdAt: Date;
+}
+
+/**
+ * Chunk upload result
+ */
+export interface ChunkUploadResult {
+  partNumber: number;
+  eTag: string;
+  uploadedChunks: number;
+  totalChunks: number;
+  progress: number;
+}
+
+/**
+ * Upload status info
+ */
+export interface UploadStatus {
+  fileId: string;
+  filename: string;
+  totalSize: number;
+  uploadedSize: number;
+  progress: number;
+  totalChunks: number;
+  uploadedChunks: number[];
+  status: string;
+  createdAt: Date;
+  expiresAt?: Date;
+}
+
+/**
+ * In-memory store for multipart upload sessions
+ * In production, this should be stored in Redis for persistence
+ */
+const uploadSessions = new Map<string, MultipartUploadSession>();
+
+/**
+ * Get the storage adapter instance
+ */
+function getStorage() {
+  return getStorageAdapter();
 }
 
 /**
@@ -341,9 +401,9 @@ export async function isFileOwner(fileId: string, userId: string): Promise<boole
 
 /**
  * Generate a pre-signed URL for file download
- * In production, this would generate a cloud storage signed URL
+ * Uses the storage adapter to generate signed URLs
  */
-export async function generateDownloadUrl(fileId: string): Promise<string> {
+export async function generateDownloadUrl(fileId: string, expiresIn = 3600): Promise<string> {
   try {
     const file = await prisma.file.findUnique({
       where: { id: fileId },
@@ -353,13 +413,11 @@ export async function generateDownloadUrl(fileId: string): Promise<string> {
       throw new Error('File not found');
     }
 
-    // In production, generate a signed URL from cloud storage
-    // For now, return a placeholder
-    const baseUrl = config.isDevelopment
-      ? `http://localhost:${config.port}`
-      : 'https://api.example.com';
-
-    return `${baseUrl}/api/v1/files/${fileId}/download`;
+    const storage = getStorage();
+    return await storage.getSignedUrl(file.storagePath, {
+      expiresIn,
+      method: 'GET',
+    });
   } catch (error) {
     logger.error('Error generating download URL:', error);
     throw error;
@@ -420,7 +478,450 @@ export function getSupportedExtensions(): string[] {
   return Object.keys(FILE_TYPE_MAP);
 }
 
+// ============================================================================
+// Multipart Upload Functions
+// ============================================================================
+
+/**
+ * Initialize a multipart upload session
+ */
+export async function initMultipartUpload(
+  projectId: string,
+  filename: string,
+  totalSize: number,
+  mimeType?: string
+): Promise<MultipartUploadSession> {
+  try {
+    // Verify project exists
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+    });
+    if (!project) {
+      throw new Error('Project not found');
+    }
+
+    // Validate file size
+    if (totalSize > config.storage.maxFileSize) {
+      throw new Error(`File size exceeds maximum allowed (${config.storage.maxFileSize} bytes)`);
+    }
+
+    // Determine file type from extension
+    const ext = path.extname(filename).toLowerCase();
+    const fileType = FILE_TYPE_MAP[ext] || 'OTHER';
+    const detectedMimeType = mimeType || MIME_TYPE_MAP[ext] || 'application/octet-stream';
+
+    // Generate unique storage path
+    const uniqueId = crypto.randomUUID();
+    const sanitizedFilename = sanitizeFilename(filename);
+    const storagePath = path.join(projectId, uniqueId, sanitizedFilename);
+
+    // Create file record in pending state
+    const file = await prisma.file.create({
+      data: {
+        name: filename,
+        storagePath,
+        mimeType: detectedMimeType,
+        size: BigInt(totalSize),
+        fileType,
+        status: 'PENDING',
+        projectId,
+      },
+    });
+
+    // Initialize multipart upload with storage adapter
+    const storage = getStorage();
+    const { uploadId } = await storage.initMultipartUpload(storagePath, {
+      contentType: detectedMimeType,
+      metadata: {
+        fileId: file.id,
+        projectId,
+        originalFilename: filename,
+      },
+    });
+
+    // Calculate chunk info
+    const chunkSize = config.storage.chunkSize;
+    const totalChunks = Math.ceil(totalSize / chunkSize);
+
+    // Store session info
+    const session: MultipartUploadSession = {
+      fileId: file.id,
+      uploadId,
+      storagePath,
+      projectId,
+      filename,
+      totalSize,
+      chunkSize,
+      totalChunks,
+      uploadedChunks: [],
+      parts: [],
+      createdAt: new Date(),
+    };
+
+    uploadSessions.set(file.id, session);
+
+    logger.info(`Multipart upload initialized: ${file.id} for project: ${projectId} (${totalChunks} chunks)`);
+
+    return session;
+  } catch (error) {
+    logger.error('Error initializing multipart upload:', error);
+    throw error;
+  }
+}
+
+/**
+ * Upload a chunk of a file
+ */
+export async function uploadChunk(
+  fileId: string,
+  chunkIndex: number,
+  data: Buffer | Readable
+): Promise<ChunkUploadResult> {
+  try {
+    const session = uploadSessions.get(fileId);
+    if (!session) {
+      throw new Error(`Upload session not found for file: ${fileId}`);
+    }
+
+    // Validate chunk index
+    if (chunkIndex < 0 || chunkIndex >= session.totalChunks) {
+      throw new Error(`Invalid chunk index: ${chunkIndex}. Expected 0-${session.totalChunks - 1}`);
+    }
+
+    // Check if chunk already uploaded
+    if (session.uploadedChunks.includes(chunkIndex)) {
+      const existingPart = session.parts.find((p) => p.partNumber === chunkIndex + 1);
+      if (existingPart) {
+        return {
+          partNumber: chunkIndex + 1,
+          eTag: existingPart.eTag,
+          uploadedChunks: session.uploadedChunks.length,
+          totalChunks: session.totalChunks,
+          progress: (session.uploadedChunks.length / session.totalChunks) * 100,
+        };
+      }
+    }
+
+    // Upload chunk to storage
+    const storage = getStorage();
+    const partNumber = chunkIndex + 1; // S3 uses 1-based part numbers
+
+    const result = await storage.uploadChunk({
+      uploadId: session.uploadId,
+      key: session.storagePath,
+      partNumber,
+      body: data,
+    });
+
+    // Update session
+    session.uploadedChunks.push(chunkIndex);
+    session.parts.push({
+      partNumber: result.partNumber,
+      eTag: result.eTag,
+    });
+
+    const progress = (session.uploadedChunks.length / session.totalChunks) * 100;
+
+    logger.debug(
+      `Chunk ${chunkIndex + 1}/${session.totalChunks} uploaded for file ${fileId} (${progress.toFixed(1)}%)`
+    );
+
+    return {
+      partNumber: result.partNumber,
+      eTag: result.eTag,
+      uploadedChunks: session.uploadedChunks.length,
+      totalChunks: session.totalChunks,
+      progress,
+    };
+  } catch (error) {
+    logger.error('Error uploading chunk:', error);
+    throw error;
+  }
+}
+
+/**
+ * Complete a multipart upload
+ */
+export async function completeMultipartUpload(
+  fileId: string,
+  checksum?: string
+): Promise<FileResponse> {
+  try {
+    const session = uploadSessions.get(fileId);
+    if (!session) {
+      throw new Error(`Upload session not found for file: ${fileId}`);
+    }
+
+    // Verify all chunks are uploaded
+    if (session.uploadedChunks.length < session.totalChunks) {
+      const missingChunks = [];
+      for (let i = 0; i < session.totalChunks; i++) {
+        if (!session.uploadedChunks.includes(i)) {
+          missingChunks.push(i);
+        }
+      }
+      throw new Error(`Missing chunks: ${missingChunks.join(', ')}`);
+    }
+
+    // Complete the multipart upload
+    const storage = getStorage();
+    await storage.completeMultipartUpload({
+      uploadId: session.uploadId,
+      key: session.storagePath,
+      parts: session.parts.sort((a, b) => a.partNumber - b.partNumber),
+    });
+
+    // Update file status to processing
+    const file = await prisma.file.update({
+      where: { id: fileId },
+      data: {
+        status: 'PROCESSING',
+        checksum,
+      },
+    });
+
+    // Clean up session
+    uploadSessions.delete(fileId);
+
+    logger.info(`Multipart upload completed for file: ${fileId}`);
+
+    return file;
+  } catch (error) {
+    logger.error('Error completing multipart upload:', error);
+    throw error;
+  }
+}
+
+/**
+ * Abort a multipart upload
+ */
+export async function abortMultipartUpload(fileId: string): Promise<void> {
+  try {
+    const session = uploadSessions.get(fileId);
+    if (!session) {
+      // Session might not exist, just clean up the database
+      await prisma.file.delete({
+        where: { id: fileId },
+      });
+      return;
+    }
+
+    // Abort the multipart upload in storage
+    const storage = getStorage();
+    await storage.abortMultipartUpload({
+      uploadId: session.uploadId,
+      key: session.storagePath,
+    });
+
+    // Delete the file record
+    await prisma.file.delete({
+      where: { id: fileId },
+    });
+
+    // Clean up session
+    uploadSessions.delete(fileId);
+
+    logger.info(`Multipart upload aborted for file: ${fileId}`);
+  } catch (error) {
+    logger.error('Error aborting multipart upload:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get upload status for a file
+ */
+export async function getUploadStatus(fileId: string): Promise<UploadStatus | null> {
+  try {
+    const file = await prisma.file.findUnique({
+      where: { id: fileId },
+    });
+
+    if (!file) {
+      return null;
+    }
+
+    const session = uploadSessions.get(fileId);
+
+    if (session) {
+      // Active upload session
+      const uploadedSize = session.uploadedChunks.length * session.chunkSize;
+      const progress = (session.uploadedChunks.length / session.totalChunks) * 100;
+
+      return {
+        fileId: file.id,
+        filename: file.name,
+        totalSize: Number(file.size),
+        uploadedSize: Math.min(uploadedSize, Number(file.size)),
+        progress,
+        totalChunks: session.totalChunks,
+        uploadedChunks: session.uploadedChunks,
+        status: file.status,
+        createdAt: file.createdAt,
+        expiresAt: new Date(session.createdAt.getTime() + 24 * 60 * 60 * 1000), // 24 hours
+      };
+    }
+
+    // No active session, return file status
+    return {
+      fileId: file.id,
+      filename: file.name,
+      totalSize: Number(file.size),
+      uploadedSize: file.status === 'PENDING' ? 0 : Number(file.size),
+      progress: file.status === 'PENDING' ? 0 : 100,
+      totalChunks: 0,
+      uploadedChunks: [],
+      status: file.status,
+      createdAt: file.createdAt,
+    };
+  } catch (error) {
+    logger.error('Error getting upload status:', error);
+    throw error;
+  }
+}
+
+/**
+ * Download a file from storage
+ */
+export async function downloadFile(
+  fileId: string
+): Promise<{ stream: Readable; contentType: string; contentLength: number; filename: string }> {
+  try {
+    const file = await prisma.file.findUnique({
+      where: { id: fileId },
+    });
+
+    if (!file) {
+      throw new Error('File not found');
+    }
+
+    if (file.status !== 'READY' && file.status !== 'PROCESSING') {
+      throw new Error(`File is not ready for download. Current status: ${file.status}`);
+    }
+
+    const storage = getStorage();
+    const result = await storage.download(file.storagePath);
+
+    return {
+      stream: result.body,
+      contentType: result.contentType ?? file.mimeType,
+      contentLength: result.contentLength ?? Number(file.size),
+      filename: file.name,
+    };
+  } catch (error) {
+    logger.error('Error downloading file:', error);
+    throw error;
+  }
+}
+
+/**
+ * Generate an upload URL for direct upload (for smaller files)
+ */
+export async function generateUploadUrl(
+  fileId: string,
+  expiresIn = 3600
+): Promise<string> {
+  try {
+    const file = await prisma.file.findUnique({
+      where: { id: fileId },
+    });
+
+    if (!file) {
+      throw new Error('File not found');
+    }
+
+    if (file.status !== 'PENDING') {
+      throw new Error(`Cannot generate upload URL for file with status: ${file.status}`);
+    }
+
+    const storage = getStorage();
+    return await storage.getSignedUrl(file.storagePath, {
+      expiresIn,
+      method: 'PUT',
+      contentType: file.mimeType,
+    });
+  } catch (error) {
+    logger.error('Error generating upload URL:', error);
+    throw error;
+  }
+}
+
+/**
+ * Upload a file directly (for smaller files, not chunked)
+ */
+export async function uploadFileDirect(
+  fileId: string,
+  data: Buffer | Readable
+): Promise<FileResponse> {
+  try {
+    const file = await prisma.file.findUnique({
+      where: { id: fileId },
+    });
+
+    if (!file) {
+      throw new Error('File not found');
+    }
+
+    if (file.status !== 'PENDING') {
+      throw new Error(`Cannot upload to file with status: ${file.status}`);
+    }
+
+    const storage = getStorage();
+    await storage.upload(file.storagePath, data, {
+      contentType: file.mimeType,
+      metadata: {
+        fileId: file.id,
+        projectId: file.projectId,
+        originalFilename: file.name,
+      },
+    });
+
+    // Update file status
+    const updatedFile = await prisma.file.update({
+      where: { id: fileId },
+      data: {
+        status: 'PROCESSING',
+      },
+    });
+
+    logger.info(`Direct upload completed for file: ${fileId}`);
+
+    return updatedFile;
+  } catch (error) {
+    logger.error('Error uploading file directly:', error);
+    throw error;
+  }
+}
+
+/**
+ * Clean up expired multipart upload sessions
+ */
+export async function cleanupExpiredUploadSessions(maxAgeHours: number = 24): Promise<number> {
+  const cutoffTime = Date.now() - maxAgeHours * 60 * 60 * 1000;
+  let cleanedCount = 0;
+  const storage = getStorage();
+
+  for (const [fileId, session] of uploadSessions.entries()) {
+    if (session.createdAt.getTime() < cutoffTime) {
+      try {
+        await storage.abortMultipartUpload({
+          uploadId: session.uploadId,
+          key: session.storagePath,
+        });
+        uploadSessions.delete(fileId);
+        cleanedCount++;
+      } catch (error) {
+        logger.error(`Error cleaning up upload session ${fileId}:`, error);
+      }
+    }
+  }
+
+  logger.info(`Cleaned up ${cleanedCount} expired upload sessions`);
+  return cleanedCount;
+}
+
 export const fileService = {
+  // Basic file operations
   createUploadSession,
   completeUpload,
   getFileMetadata,
@@ -435,6 +936,16 @@ export const fileService = {
   cleanupOrphanedUploads,
   isAllowedFileType,
   getSupportedExtensions,
+  // Multipart upload operations
+  initMultipartUpload,
+  uploadChunk,
+  completeMultipartUpload,
+  abortMultipartUpload,
+  getUploadStatus,
+  downloadFile,
+  generateUploadUrl,
+  uploadFileDirect,
+  cleanupExpiredUploadSessions,
 };
 
 export default fileService;
