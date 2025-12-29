@@ -7,6 +7,8 @@ import viewerRouter from './viewer.js';
 import reportsRouter from './reports.js';
 import speciesRouter from './species.js';
 import volumeRouter from './volume.routes.js';
+import standsRouter from './stands.routes.js';
+import exportRouter from './export.routes.js';
 
 const router = Router();
 
@@ -19,6 +21,8 @@ router.use('/viewer', viewerRouter);
 router.use('/reports', reportsRouter);
 router.use('/species', speciesRouter);
 router.use('/volume', volumeRouter);
+router.use('/stands', standsRouter);
+router.use('/export', exportRouter);
 
 // API info endpoint
 router.get('/', (_req, res) => {
@@ -34,6 +38,8 @@ router.get('/', (_req, res) => {
       reports: '/api/v1/reports',
       species: '/api/v1/species',
       volume: '/api/v1/volume',
+      stands: '/api/v1/stands',
+      export: '/api/v1/export',
     },
   });
 });

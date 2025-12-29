@@ -52,6 +52,28 @@ from lidar_processing.services.allometric_equations import (
     RegionCode,
 )
 
+# FIA Reports & Export Services (Sprint 21-24)
+from lidar_processing.services.stand_delineator import (
+    StandDelineator,
+    Stand,
+    StandSummary,
+    StandBoundary,
+    DelineationResult,
+    ClusteringMethod,
+)
+from lidar_processing.services.fia_report_generator import (
+    FIAReportGenerator,
+    FIAReport,
+    FIATreeRecord,
+    FIAPlotRecord,
+    FIASpeciesSummary,
+)
+from lidar_processing.services.spatial_exporter import (
+    SpatialExporter,
+    ExportFormat,
+    ExportResult,
+)
+
 __all__ = [
     # Core Processing Services
     "LidarValidator",
@@ -99,4 +121,19 @@ __all__ = [
     "TreeEstimates",
     "WoodType",
     "RegionCode",
+    # FIA Reports & Export Services (Sprint 21-24)
+    "StandDelineator",
+    "Stand",
+    "StandSummary",
+    "StandBoundary",
+    "DelineationResult",
+    "ClusteringMethod",
+    "FIAReportGenerator",
+    "FIAReport",
+    "FIATreeRecord",
+    "FIAPlotRecord",
+    "FIASpeciesSummary",
+    "SpatialExporter",
+    "ExportFormat",
+    "ExportResult",
 ]

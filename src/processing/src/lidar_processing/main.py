@@ -73,6 +73,12 @@ from lidar_processing.services.allometric_equations import (
     SPECIES_ALLOMETRY,
     TreeEstimates,
 )
+from lidar_processing.services.stand_delineator import (
+    StandDelineator,
+    ClusteringMethod,
+)
+from lidar_processing.services.fia_report_generator import FIAReportGenerator
+from lidar_processing.services.spatial_exporter import SpatialExporter, ExportFormat
 
 logger = logging.getLogger(__name__)
 
@@ -1946,6 +1952,508 @@ def _register_routes(app: FastAPI, settings: Settings) -> None:
                 "wood_density_kg_m3": allometry.wood_density,
                 "form_factor": allometry.form_factor,
             },
+        }
+
+    # ========================================================================
+    # Stand Delineation Endpoints (Sprint 21-24)
+    # ========================================================================
+
+    # Initialize stand delineator and spatial exporter
+    stand_delineator = StandDelineator()
+    spatial_exporter = SpatialExporter()
+    fia_report_generator = FIAReportGenerator()
+
+    @app.post(
+        "/api/v1/stands/delineate",
+        tags=["Stand Delineation"],
+        summary="Delineate forest stands",
+        description="""
+        Automatically delineates forest stands from tree data using
+        clustering algorithms.
+
+        Supported methods:
+        - dbscan: Density-based spatial clustering (recommended)
+        - kmeans: K-means clustering with specified number of stands
+        - grid: Grid-based delineation with specified cell size
+        - attribute: Clustering based on tree attributes (height, species)
+
+        Returns stand boundaries, summaries, and tree assignments.
+        """,
+        responses={
+            200: {"description": "Stands delineated successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def delineate_stands(
+        trees: list[dict[str, Any]],
+        method: str = "dbscan",
+        min_trees: int = 5,
+        eps: float = 20.0,
+        n_clusters: int | None = None,
+        grid_size: float = 50.0,
+        attribute_weights: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
+        """Delineate forest stands from tree data."""
+        try:
+            start_time = time.time()
+
+            # Parse clustering method
+            try:
+                clustering_method = ClusteringMethod(method.lower())
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid method: {method}. Use: dbscan, kmeans, grid, attribute",
+                )
+
+            # Run delineation
+            result = stand_delineator.delineate(
+                trees=trees,
+                method=clustering_method,
+                min_trees=min_trees,
+                eps=eps,
+                n_clusters=n_clusters,
+                grid_size=grid_size,
+                attribute_weights=attribute_weights,
+            )
+
+            processing_time = (time.time() - start_time) * 1000
+
+            # Convert result to dict
+            stands_data = []
+            for stand in result.stands:
+                stands_data.append({
+                    "stand_id": stand.stand_id,
+                    "tree_count": stand.tree_count,
+                    "area_hectares": stand.area_hectares,
+                    "summary": {
+                        "stems_per_hectare": stand.summary.stems_per_hectare,
+                        "basal_area_m2_ha": stand.summary.basal_area_m2_ha,
+                        "volume_m3_ha": stand.summary.volume_m3_ha,
+                        "biomass_kg_ha": stand.summary.biomass_kg_ha,
+                        "carbon_kg_ha": stand.summary.carbon_kg_ha,
+                        "mean_height_m": stand.summary.mean_height_m,
+                        "dominant_height_m": stand.summary.dominant_height_m,
+                        "mean_dbh_cm": stand.summary.mean_dbh_cm,
+                        "qmd_cm": stand.summary.qmd_cm,
+                        "sdi": stand.summary.sdi,
+                        "stand_type": stand.summary.stand_type,
+                        "dominant_species": stand.summary.dominant_species,
+                    },
+                    "boundary": {
+                        "type": "Polygon",
+                        "coordinates": stand.boundary.coordinates,
+                    } if stand.boundary else None,
+                    "centroid": stand.centroid,
+                })
+
+            return {
+                "stands": stands_data,
+                "total_stands": result.total_stands,
+                "total_trees": result.total_trees,
+                "unassigned_trees": result.unassigned_trees,
+                "method": result.method,
+                "processing_time_ms": round(processing_time, 2),
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("Stand delineation failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Delineation failed: {str(e)}",
+            )
+
+    @app.post(
+        "/api/v1/stands/summary",
+        tags=["Stand Delineation"],
+        summary="Calculate stand summary",
+        description="""
+        Calculates summary statistics for a stand from tree data.
+
+        Returns per-hectare metrics, species composition, size class
+        distribution, and stand classification.
+        """,
+        responses={
+            200: {"description": "Summary calculated successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def calculate_stand_summary(
+        trees: list[dict[str, Any]],
+        area_hectares: float,
+        stand_id: str = "stand_1",
+    ) -> dict[str, Any]:
+        """Calculate summary for a stand."""
+        try:
+            summary = stand_delineator.calculate_stand_summary(
+                trees=trees,
+                area_hectares=area_hectares,
+            )
+
+            return {
+                "stand_id": stand_id,
+                "area_hectares": area_hectares,
+                "tree_count": len(trees),
+                "stems_per_hectare": summary.stems_per_hectare,
+                "basal_area_m2_ha": summary.basal_area_m2_ha,
+                "volume_m3_ha": summary.volume_m3_ha,
+                "biomass_kg_ha": summary.biomass_kg_ha,
+                "carbon_kg_ha": summary.carbon_kg_ha,
+                "co2_kg_ha": summary.co2_kg_ha,
+                "mean_height_m": summary.mean_height_m,
+                "dominant_height_m": summary.dominant_height_m,
+                "mean_dbh_cm": summary.mean_dbh_cm,
+                "qmd_cm": summary.qmd_cm,
+                "sdi": summary.sdi,
+                "stand_type": summary.stand_type,
+                "size_class": summary.size_class,
+                "dominant_species": summary.dominant_species,
+                "species_composition": summary.species_composition,
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
+    # ========================================================================
+    # FIA Report Endpoints (Sprint 21-24)
+    # ========================================================================
+
+    @app.post(
+        "/api/v1/fia/generate",
+        tags=["FIA Reports"],
+        summary="Generate FIA-compliant report",
+        description="""
+        Generates a Forest Inventory and Analysis (FIA) compliant report
+        from tree data.
+
+        Report includes:
+        - Tree records with FIA species codes
+        - Plot-level summaries
+        - Species summary tables
+        - Size class distributions
+        - All measurements in imperial units (FIA standard)
+        """,
+        responses={
+            200: {"description": "Report generated successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def generate_fia_report(
+        trees: list[dict[str, Any]],
+        plot_id: str = "PLOT001",
+        state_code: str = "41",
+        county_code: str = "001",
+        plot_area_acres: float = 0.25,
+    ) -> dict[str, Any]:
+        """Generate FIA-compliant report."""
+        try:
+            start_time = time.time()
+
+            report = fia_report_generator.generate_report(
+                trees=trees,
+                plot_id=plot_id,
+                state_code=state_code,
+                county_code=county_code,
+                plot_area_acres=plot_area_acres,
+            )
+
+            processing_time = (time.time() - start_time) * 1000
+
+            # Convert to dict format
+            tree_records = []
+            for tree in report.tree_records:
+                tree_records.append({
+                    "tree_id": tree.tree_id,
+                    "fia_species_code": tree.fia_species_code,
+                    "species_common": tree.species_common,
+                    "dbh_inches": tree.dbh_inches,
+                    "height_feet": tree.height_feet,
+                    "crown_ratio": tree.crown_ratio,
+                    "status_code": tree.status_code,
+                    "damage_code": tree.damage_code,
+                    "volume_cuft": tree.volume_cuft,
+                    "biomass_lb": tree.biomass_lb,
+                })
+
+            species_summary = []
+            for sp in report.species_summary:
+                species_summary.append({
+                    "fia_species_code": sp.fia_species_code,
+                    "species_common": sp.species_common,
+                    "tree_count": sp.tree_count,
+                    "basal_area_sqft_ac": sp.basal_area_sqft_ac,
+                    "volume_cuft_ac": sp.volume_cuft_ac,
+                    "biomass_lb_ac": sp.biomass_lb_ac,
+                    "mean_dbh_inches": sp.mean_dbh_inches,
+                    "mean_height_feet": sp.mean_height_feet,
+                })
+
+            return {
+                "plot_id": report.plot_record.plot_id,
+                "state_code": report.plot_record.state_code,
+                "county_code": report.plot_record.county_code,
+                "plot_area_acres": report.plot_record.plot_area_acres,
+                "total_trees": report.plot_record.total_trees,
+                "trees_per_acre": report.plot_record.trees_per_acre,
+                "basal_area_sqft_ac": report.plot_record.basal_area_sqft_ac,
+                "volume_cuft_ac": report.plot_record.volume_cuft_ac,
+                "biomass_lb_ac": report.plot_record.biomass_lb_ac,
+                "tree_records": tree_records,
+                "species_summary": species_summary,
+                "size_class_distribution": report.size_class_distribution,
+                "generated_at": report.generated_at.isoformat(),
+                "processing_time_ms": round(processing_time, 2),
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("FIA report generation failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Report generation failed: {str(e)}",
+            )
+
+    @app.get(
+        "/api/v1/fia/species-codes",
+        tags=["FIA Reports"],
+        summary="Get FIA species codes",
+        description="""
+        Returns mapping of internal species codes to FIA species codes
+        and common names.
+        """,
+        responses={
+            200: {"description": "Species codes returned successfully"},
+        },
+    )
+    async def get_fia_species_codes() -> dict[str, Any]:
+        """Get FIA species code mapping."""
+        return {
+            "species_codes": fia_report_generator.get_species_codes(),
+            "description": "Mapping from internal species codes to FIA numeric codes",
+        }
+
+    # ========================================================================
+    # Spatial Export Endpoints (Sprint 21-24)
+    # ========================================================================
+
+    @app.post(
+        "/api/v1/export/trees",
+        tags=["Spatial Export"],
+        summary="Export trees to spatial format",
+        description="""
+        Exports tree data to various spatial formats.
+
+        Supported formats:
+        - geojson: GeoJSON FeatureCollection
+        - shapefile: Zipped Shapefile (.shp, .shx, .dbf, .prj)
+        - kml: KML for Google Earth
+        - csv: CSV with WKT geometry
+
+        Trees are exported as point features with all attributes.
+        """,
+        responses={
+            200: {"description": "Export successful"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def export_trees(
+        trees: list[dict[str, Any]],
+        format: str = "geojson",
+        crs: str = "EPSG:4326",
+        output_path: str | None = None,
+    ) -> Any:
+        """Export trees to spatial format."""
+        from fastapi.responses import Response, FileResponse
+
+        try:
+            # Parse format
+            try:
+                export_format = ExportFormat(format.lower())
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid format: {format}. Use: geojson, shapefile, kml, csv",
+                )
+
+            result = spatial_exporter.export_trees(
+                trees=trees,
+                format=export_format,
+                crs=crs,
+                output_path=output_path,
+            )
+
+            if result.file_path and export_format == ExportFormat.SHAPEFILE:
+                # Return zipped shapefile
+                return FileResponse(
+                    path=result.file_path,
+                    media_type="application/zip",
+                    filename=f"trees_export.zip",
+                )
+            elif result.data:
+                # Return data directly
+                if export_format == ExportFormat.GEOJSON:
+                    return JSONResponse(content=result.data)
+                elif export_format == ExportFormat.KML:
+                    return Response(
+                        content=result.data,
+                        media_type="application/vnd.google-earth.kml+xml",
+                        headers={"Content-Disposition": 'attachment; filename="trees.kml"'},
+                    )
+                elif export_format == ExportFormat.CSV:
+                    return Response(
+                        content=result.data,
+                        media_type="text/csv",
+                        headers={"Content-Disposition": 'attachment; filename="trees.csv"'},
+                    )
+            else:
+                return {"success": True, "file_path": result.file_path}
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("Tree export failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Export failed: {str(e)}",
+            )
+
+    @app.post(
+        "/api/v1/export/stands",
+        tags=["Spatial Export"],
+        summary="Export stands to spatial format",
+        description="""
+        Exports stand boundaries to various spatial formats.
+
+        Supported formats:
+        - geojson: GeoJSON FeatureCollection
+        - shapefile: Zipped Shapefile (.shp, .shx, .dbf, .prj)
+        - kml: KML for Google Earth
+        - csv: CSV with WKT geometry
+
+        Stands are exported as polygon features with summary attributes.
+        """,
+        responses={
+            200: {"description": "Export successful"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def export_stands(
+        stands: list[dict[str, Any]],
+        format: str = "geojson",
+        crs: str = "EPSG:4326",
+        output_path: str | None = None,
+    ) -> Any:
+        """Export stands to spatial format."""
+        from fastapi.responses import Response, FileResponse
+
+        try:
+            # Parse format
+            try:
+                export_format = ExportFormat(format.lower())
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid format: {format}. Use: geojson, shapefile, kml, csv",
+                )
+
+            result = spatial_exporter.export_stands(
+                stands=stands,
+                format=export_format,
+                crs=crs,
+                output_path=output_path,
+            )
+
+            if result.file_path and export_format == ExportFormat.SHAPEFILE:
+                # Return zipped shapefile
+                return FileResponse(
+                    path=result.file_path,
+                    media_type="application/zip",
+                    filename=f"stands_export.zip",
+                )
+            elif result.data:
+                # Return data directly
+                if export_format == ExportFormat.GEOJSON:
+                    return JSONResponse(content=result.data)
+                elif export_format == ExportFormat.KML:
+                    return Response(
+                        content=result.data,
+                        media_type="application/vnd.google-earth.kml+xml",
+                        headers={"Content-Disposition": 'attachment; filename="stands.kml"'},
+                    )
+                elif export_format == ExportFormat.CSV:
+                    return Response(
+                        content=result.data,
+                        media_type="text/csv",
+                        headers={"Content-Disposition": 'attachment; filename="stands.csv"'},
+                    )
+            else:
+                return {"success": True, "file_path": result.file_path}
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("Stand export failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Export failed: {str(e)}",
+            )
+
+    @app.get(
+        "/api/v1/export/formats",
+        tags=["Spatial Export"],
+        summary="Get supported export formats",
+        description="Returns list of supported export formats and their descriptions.",
+        responses={
+            200: {"description": "Formats returned successfully"},
+        },
+    )
+    async def get_export_formats() -> dict[str, Any]:
+        """Get supported export formats."""
+        return {
+            "formats": [
+                {
+                    "name": "geojson",
+                    "description": "GeoJSON FeatureCollection - widely supported web format",
+                    "extension": ".geojson",
+                    "mime_type": "application/geo+json",
+                },
+                {
+                    "name": "shapefile",
+                    "description": "ESRI Shapefile - industry standard GIS format (zipped)",
+                    "extension": ".zip",
+                    "mime_type": "application/zip",
+                },
+                {
+                    "name": "kml",
+                    "description": "Keyhole Markup Language - for Google Earth",
+                    "extension": ".kml",
+                    "mime_type": "application/vnd.google-earth.kml+xml",
+                },
+                {
+                    "name": "csv",
+                    "description": "CSV with WKT geometry - for spreadsheets and databases",
+                    "extension": ".csv",
+                    "mime_type": "text/csv",
+                },
+            ],
         }
 
 
