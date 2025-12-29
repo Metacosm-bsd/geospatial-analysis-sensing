@@ -427,3 +427,377 @@ enum ReportStatus {
   COMPLETED
   FAILED
 }
+
+// ============================================================================
+// Organization & Team Management (Sprint 43-48)
+// ============================================================================
+
+model Organization {
+  id              String    @id @default(uuid())
+  name            String
+  slug            String    @unique  // URL-friendly identifier
+  description     String?
+  logoUrl         String?   @map("logo_url")
+  website         String?
+
+  // Billing/Plan
+  plan            OrgPlan   @default(FREE)
+  planExpiresAt   DateTime? @map("plan_expires_at")
+
+  // Settings
+  settings        Json?     // Organization-level settings
+
+  // SSO Configuration (Enterprise)
+  ssoEnabled      Boolean   @default(false) @map("sso_enabled")
+  ssoProvider     String?   @map("sso_provider")  // 'saml', 'oidc'
+  ssoConfig       Json?     @map("sso_config")    // SSO configuration details
+
+  // Members and Projects
+  members         OrganizationMember[]
+  projects        OrgProject[]
+  invitations     Invitation[]
+  activityLogs    ActivityLog[]
+
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@index([slug])
+  @@map("organizations")
+}
+
+enum OrgPlan {
+  FREE        // Basic plan
+  STARTER     // Small teams
+  PROFESSIONAL // Professional features
+  ENTERPRISE  // Enterprise with SSO, SLA
+}
+
+model OrganizationMember {
+  id              String   @id @default(uuid())
+
+  // Relations
+  organizationId  String   @map("organization_id")
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId          String   @map("user_id")
+
+  // Role within organization
+  role            OrgRole  @default(MEMBER)
+
+  // Status
+  status          MemberStatus @default(ACTIVE)
+
+  // Timestamps
+  joinedAt        DateTime @default(now()) @map("joined_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  // Comments and activities by this member
+  comments        Comment[]
+  annotations     Annotation[]
+  activityLogs    ActivityLog[]
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+  @@index([userId])
+  @@map("organization_members")
+}
+
+enum OrgRole {
+  OWNER     // Full control, billing, can delete org
+  ADMIN     // Can manage members, settings
+  MEMBER    // Standard member (can create/edit own work)
+  EDITOR    // Can create/edit projects and analyses
+  VIEWER    // Read-only access
+}
+
+enum MemberStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+// Organization-owned projects (shared projects)
+model OrgProject {
+  id              String   @id @default(uuid())
+
+  // Relations
+  organizationId  String   @map("organization_id")
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  projectId       String   @map("project_id")
+
+  // Sharing settings
+  accessLevel     ProjectAccessLevel @default(PRIVATE)
+
+  // Timestamps
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@unique([organizationId, projectId])
+  @@index([organizationId])
+  @@index([projectId])
+  @@map("org_projects")
+}
+
+enum ProjectAccessLevel {
+  PRIVATE   // Only explicit members
+  ORG_READ  // All org members can view
+  ORG_EDIT  // All org members can edit
+  PUBLIC    // Anyone with link (view only)
+}
+
+// Invitations for new members
+model Invitation {
+  id              String   @id @default(uuid())
+
+  // Organization
+  organizationId  String   @map("organization_id")
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Invitation details
+  email           String
+  role            OrgRole  @default(MEMBER)
+  token           String   @unique
+
+  // Status
+  status          InviteStatus @default(PENDING)
+
+  // Invited by
+  invitedBy       String   @map("invited_by")
+
+  // Timestamps
+  createdAt       DateTime @default(now()) @map("created_at")
+  expiresAt       DateTime @map("expires_at")
+  acceptedAt      DateTime? @map("accepted_at")
+
+  @@index([organizationId])
+  @@index([email])
+  @@index([token])
+  @@map("invitations")
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  CANCELLED
+}
+
+// ============================================================================
+// Comments & Annotations (Sprint 43-48)
+// ============================================================================
+
+model Comment {
+  id              String   @id @default(uuid())
+  content         String   // Comment text (supports markdown)
+
+  // Author (organization member)
+  authorId        String   @map("author_id")
+  author          OrganizationMember @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  // Target - what the comment is on
+  targetType      CommentTargetType @map("target_type")
+  targetId        String   @map("target_id")
+
+  // Thread support (replies)
+  parentId        String?  @map("parent_id")
+  parent          Comment? @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies         Comment[] @relation("CommentReplies")
+
+  // Mentions
+  mentions        CommentMention[]
+
+  // Status
+  isEdited        Boolean  @default(false) @map("is_edited")
+  isDeleted       Boolean  @default(false) @map("is_deleted")
+
+  // Timestamps
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([authorId])
+  @@index([targetType, targetId])
+  @@index([parentId])
+  @@map("comments")
+}
+
+enum CommentTargetType {
+  PROJECT
+  ANALYSIS
+  REPORT
+  FILE
+}
+
+// @mentions in comments
+model CommentMention {
+  id              String   @id @default(uuid())
+
+  commentId       String   @map("comment_id")
+  comment         Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  // Mentioned user (by userId)
+  mentionedUserId String   @map("mentioned_user_id")
+
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([commentId])
+  @@index([mentionedUserId])
+  @@map("comment_mentions")
+}
+
+// 3D Viewer Annotations
+model Annotation {
+  id              String   @id @default(uuid())
+
+  // Author
+  authorId        String   @map("author_id")
+  author          OrganizationMember @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  // Target analysis/project
+  analysisId      String   @map("analysis_id")
+
+  // Annotation content
+  title           String
+  description     String?
+
+  // 3D position and camera state
+  position        Json     // {x, y, z} coordinates in scene
+  cameraState     Json?    @map("camera_state") // Camera position/rotation for restoring view
+
+  // Visual properties
+  color           String?  // Annotation marker color
+  icon            String?  // Icon type
+
+  // Visibility
+  isPublic        Boolean  @default(true) @map("is_public")
+
+  // Timestamps
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([authorId])
+  @@index([analysisId])
+  @@map("annotations")
+}
+
+// ============================================================================
+// Activity Log & Notifications (Sprint 43-48)
+// ============================================================================
+
+model ActivityLog {
+  id              String   @id @default(uuid())
+
+  // Organization context
+  organizationId  String   @map("organization_id")
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Actor (who performed the action)
+  actorId         String?  @map("actor_id")
+  actor           OrganizationMember? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  // Action details
+  action          ActivityAction
+  targetType      String   @map("target_type") // 'project', 'analysis', 'member', etc.
+  targetId        String?  @map("target_id")
+  targetName      String?  @map("target_name") // Human-readable name
+
+  // Additional context
+  metadata        Json?    // Extra details about the action
+
+  // IP/Device info for audit
+  ipAddress       String?  @map("ip_address")
+  userAgent       String?  @map("user_agent")
+
+  // Timestamp
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([organizationId])
+  @@index([actorId])
+  @@index([action])
+  @@index([targetType, targetId])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+enum ActivityAction {
+  // Member actions
+  MEMBER_JOINED
+  MEMBER_INVITED
+  MEMBER_REMOVED
+  MEMBER_ROLE_CHANGED
+
+  // Project actions
+  PROJECT_CREATED
+  PROJECT_UPDATED
+  PROJECT_DELETED
+  PROJECT_SHARED
+
+  // Analysis actions
+  ANALYSIS_CREATED
+  ANALYSIS_COMPLETED
+  ANALYSIS_FAILED
+  ANALYSIS_DELETED
+
+  // File actions
+  FILE_UPLOADED
+  FILE_DELETED
+
+  // Report actions
+  REPORT_GENERATED
+  REPORT_DOWNLOADED
+
+  // Comment actions
+  COMMENT_ADDED
+  COMMENT_EDITED
+  COMMENT_DELETED
+
+  // Annotation actions
+  ANNOTATION_CREATED
+  ANNOTATION_UPDATED
+  ANNOTATION_DELETED
+
+  // Organization actions
+  ORG_SETTINGS_UPDATED
+  ORG_PLAN_CHANGED
+}
+
+model Notification {
+  id              String   @id @default(uuid())
+
+  // Recipient (by userId)
+  userId          String   @map("user_id")
+
+  // Notification content
+  type            NotificationType
+  title           String
+  message         String
+
+  // Link to related resource
+  targetType      String?  @map("target_type")
+  targetId        String?  @map("target_id")
+
+  // Status
+  isRead          Boolean  @default(false) @map("is_read")
+  readAt          DateTime? @map("read_at")
+
+  // Email notification
+  emailSent       Boolean  @default(false) @map("email_sent")
+  emailSentAt     DateTime? @map("email_sent_at")
+
+  // Timestamps
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+enum NotificationType {
+  MENTION          // @mentioned in comment
+  COMMENT_REPLY    // Reply to your comment
+  ANALYSIS_COMPLETE // Analysis finished
+  ANALYSIS_FAILED  // Analysis failed
+  INVITATION       // Invited to organization
+  PROJECT_SHARED   // Project shared with you
+  ROLE_CHANGED     // Your role was changed
+  REPORT_READY     // Report generation complete
+}

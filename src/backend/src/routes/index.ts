@@ -9,6 +9,9 @@ import speciesRouter from './species.js';
 import volumeRouter from './volume.routes.js';
 import standsRouter from './stands.routes.js';
 import exportRouter from './export.routes.js';
+import organizationsRouter from './organizations.js';
+import commentsRouter from './comments.js';
+import notificationsRouter from './notifications.js';
 
 const router = Router();
 
@@ -23,6 +26,9 @@ router.use('/species', speciesRouter);
 router.use('/volume', volumeRouter);
 router.use('/stands', standsRouter);
 router.use('/export', exportRouter);
+router.use('/organizations', organizationsRouter);
+router.use('/comments', commentsRouter);
+router.use('/notifications', notificationsRouter);
 
 // API info endpoint
 router.get('/', (_req, res) => {
@@ -40,6 +46,9 @@ router.get('/', (_req, res) => {
       volume: '/api/v1/volume',
       stands: '/api/v1/stands',
       export: '/api/v1/export',
+      organizations: '/api/v1/organizations',
+      comments: '/api/v1/comments',
+      notifications: '/api/v1/notifications',
     },
   });
 });
