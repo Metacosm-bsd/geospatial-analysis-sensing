@@ -1,13 +1,15 @@
 /**
- * Species Classification Job - Sprint 13-14
+ * Species Classification Job - Sprint 13-16
  * BullMQ worker for async species classification
  * Communicates with Python service for ML-based classification
+ * Sprint 15-16: Added batch classification support
  */
 
 import { Job, Worker } from 'bullmq';
 import { config } from '../config/index.js';
 import { logger } from '../config/logger.js';
-import { createWorker } from '../config/queue.js';
+import { createWorker, createQueue } from '../config/queue.js';
+import { prisma } from '../config/database.js';
 import * as speciesService from '../services/species.service.js';
 import type {
   ClassifySpeciesOptions,
@@ -15,10 +17,33 @@ import type {
   SpeciesClassificationResult,
   PythonClassifyResponse,
   SupportedRegion,
+  BatchProgress,
 } from '../types/species.js';
 
 // Queue name for species classification
 const SPECIES_QUEUE_NAME = 'species-classification';
+const BATCH_QUEUE_NAME = 'species-batch-classification';
+
+// ============================================================================
+// Sprint 15-16: Batch Classification Job Data
+// ============================================================================
+
+interface BatchClassificationJobData {
+  analysisId: string;
+  region: SupportedRegion;
+  userId: string;
+  batchSize: number;
+}
+
+interface BatchClassificationResult {
+  success: boolean;
+  analysisId: string;
+  totalTrees: number;
+  processedTrees: number;
+  failedBatches: number;
+  processingTime: number;
+  error?: string;
+}
 
 // ============================================================================
 // Species Classification Job Processing
@@ -287,12 +312,378 @@ export async function cancelSpeciesClassification(analysisId: string): Promise<b
 }
 
 // ============================================================================
+// Sprint 15-16: Batch Classification Processing
+// ============================================================================
+
+/**
+ * Process a batch species classification job
+ * Handles large analyses by processing trees in batches with progress reporting
+ */
+async function processBatchClassificationJob(
+  job: Job<BatchClassificationJobData>
+): Promise<BatchClassificationResult> {
+  const { analysisId, region, userId, batchSize } = job.data;
+  const startTime = Date.now();
+
+  logger.info(
+    `Starting batch species classification job ${job.id} for analysis ${analysisId} with batch size ${batchSize}`
+  );
+
+  try {
+    // Verify user has access to the analysis
+    const analysis = await prisma.analysis.findUnique({
+      where: { id: analysisId },
+      include: {
+        project: {
+          select: {
+            id: true,
+            userId: true,
+          },
+        },
+      },
+    });
+
+    if (!analysis) {
+      throw new Error('Analysis not found');
+    }
+
+    if (analysis.project.userId !== userId) {
+      throw new Error('Access denied: You do not own this analysis');
+    }
+
+    // Get total tree count
+    const totalTrees = await prisma.treeDetection.count({
+      where: { analysisId },
+    });
+
+    if (totalTrees === 0) {
+      logger.warn(`No trees found for batch classification in analysis ${analysisId}`);
+      return {
+        success: true,
+        analysisId,
+        totalTrees: 0,
+        processedTrees: 0,
+        failedBatches: 0,
+        processingTime: Date.now() - startTime,
+      };
+    }
+
+    await job.updateProgress(5);
+
+    // Calculate number of batches
+    const numBatches = Math.ceil(totalTrees / batchSize);
+    let processedTrees = 0;
+    let failedBatches = 0;
+
+    logger.info(`Processing ${totalTrees} trees in ${numBatches} batches for analysis ${analysisId}`);
+
+    // Process trees in batches
+    for (let batchIndex = 0; batchIndex < numBatches; batchIndex++) {
+      const offset = batchIndex * batchSize;
+
+      try {
+        // Get batch of trees
+        const trees = await prisma.treeDetection.findMany({
+          where: { analysisId },
+          skip: offset,
+          take: batchSize,
+          select: {
+            id: true,
+            x: true,
+            y: true,
+            z: true,
+            height: true,
+            crownDiameter: true,
+            dbh: true,
+          },
+        });
+
+        // Define tree type for Python conversion
+        type TreeBatchData = {
+          id: string;
+          x: number;
+          y: number;
+          z: number;
+          height: number;
+          crownDiameter: number;
+          dbh: number | null;
+        };
+
+        // Convert to Python format - handle optional dbh properly
+        const pythonTrees = (trees as TreeBatchData[]).map((tree: TreeBatchData) => {
+          const pythonTree: {
+            id: string;
+            x: number;
+            y: number;
+            z: number;
+            height: number;
+            crownDiameter: number;
+            dbh?: number;
+          } = {
+            id: tree.id,
+            x: tree.x,
+            y: tree.y,
+            z: tree.z,
+            height: tree.height,
+            crownDiameter: tree.crownDiameter,
+          };
+          if (tree.dbh !== null) {
+            pythonTree.dbh = tree.dbh;
+          }
+          return pythonTree;
+        });
+
+        // Send to Python classifier or use simulation
+        let pythonResult: PythonClassifyResponse;
+        try {
+          pythonResult = await speciesService.sendToPythonClassifier(
+            analysisId,
+            pythonTrees,
+            region,
+            { minConfidence: 0.7, includeUncertain: false, useEnsemble: true }
+          );
+        } catch (processingError) {
+          // Fallback to simulation in development
+          if (config.isDevelopment) {
+            pythonResult = await speciesService.simulateClassification(analysisId, pythonTrees, region);
+          } else {
+            throw processingError;
+          }
+        }
+
+        // Update trees with predictions
+        if (pythonResult.success && pythonResult.predictions) {
+          await speciesService.updateTreesWithPredictions(pythonResult.predictions);
+          processedTrees += pythonResult.predictions.length;
+        }
+
+        // Update progress
+        const progress = Math.round(((batchIndex + 1) / numBatches) * 90) + 5;
+        await job.updateProgress(progress);
+
+        logger.debug(
+          `Batch ${batchIndex + 1}/${numBatches} completed for analysis ${analysisId}. ` +
+            `Processed ${processedTrees}/${totalTrees} trees.`
+        );
+      } catch (batchError) {
+        failedBatches++;
+        const errorMessage = batchError instanceof Error ? batchError.message : 'Unknown batch error';
+        logger.error(`Batch ${batchIndex + 1} failed for analysis ${analysisId}: ${errorMessage}`);
+
+        // Continue with next batch - don't fail entire job for single batch failure
+      }
+    }
+
+    await job.updateProgress(100);
+
+    const processingTime = Date.now() - startTime;
+    logger.info(
+      `Batch species classification for analysis ${analysisId} completed in ${processingTime}ms. ` +
+        `Processed ${processedTrees}/${totalTrees} trees with ${failedBatches} failed batches.`
+    );
+
+    return {
+      success: failedBatches < numBatches, // Success if at least some batches succeeded
+      analysisId,
+      totalTrees,
+      processedTrees,
+      failedBatches,
+      processingTime,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown batch classification error';
+    logger.error(`Batch classification job failed for ${analysisId}: ${errorMessage}`);
+
+    return {
+      success: false,
+      analysisId,
+      totalTrees: 0,
+      processedTrees: 0,
+      failedBatches: 0,
+      processingTime: Date.now() - startTime,
+      error: errorMessage,
+    };
+  }
+}
+
+/**
+ * Create and start the batch species classification worker
+ */
+export function createBatchSpeciesClassificationWorker(
+  concurrency = 2
+): Worker<BatchClassificationJobData, BatchClassificationResult> {
+  const worker = createWorker<BatchClassificationJobData, BatchClassificationResult>(
+    BATCH_QUEUE_NAME as never,
+    processBatchClassificationJob,
+    concurrency
+  );
+
+  worker.on('completed', (job, result) => {
+    if (result.success) {
+      logger.info(
+        `Batch classification job ${job.id} completed for analysis ${result.analysisId}. ` +
+          `Processed ${result.processedTrees}/${result.totalTrees} trees in ${result.processingTime}ms.`
+      );
+    } else {
+      logger.warn(
+        `Batch classification job ${job.id} completed with error for analysis ${result.analysisId}: ` +
+          `${result.error}`
+      );
+    }
+  });
+
+  worker.on('failed', (job, error) => {
+    logger.error(
+      `Batch classification job ${job?.id} failed for analysis ${job?.data.analysisId}: ${error.message}`
+    );
+  });
+
+  worker.on('progress', (job, progress) => {
+    logger.debug(`Batch classification job ${job.id} progress: ${progress}%`);
+  });
+
+  logger.info(`Batch species classification worker started with concurrency: ${concurrency}`);
+
+  return worker;
+}
+
+/**
+ * Queue an analysis for batch species classification
+ */
+export async function queueBatchSpeciesClassification(
+  analysisId: string,
+  region: SupportedRegion,
+  userId: string,
+  batchSize: number = 1000
+): Promise<string> {
+  // Verify the analysis exists and user has access
+  const analysis = await prisma.analysis.findUnique({
+    where: { id: analysisId },
+    include: {
+      project: {
+        select: {
+          id: true,
+          userId: true,
+        },
+      },
+    },
+  });
+
+  if (!analysis) {
+    throw new Error('Analysis not found');
+  }
+
+  if (analysis.project.userId !== userId) {
+    throw new Error('Access denied: You do not own this analysis');
+  }
+
+  const queue = createQueue(BATCH_QUEUE_NAME as never);
+
+  const job = await queue.add(
+    'batch-classify-species',
+    {
+      analysisId,
+      region,
+      userId,
+      batchSize,
+    },
+    {
+      jobId: `batch-species-${analysisId}-${Date.now()}`,
+      priority: 3, // Lower priority than regular classification
+      attempts: 2,
+      backoff: {
+        type: 'exponential',
+        delay: 10000,
+      },
+    }
+  );
+
+  logger.info(
+    `Analysis ${analysisId} queued for batch species classification with job ID: ${job.id}, batch size: ${batchSize}`
+  );
+
+  return job.id ?? analysisId;
+}
+
+/**
+ * Get batch species classification job progress
+ */
+export async function getBatchJobProgress(jobId: string): Promise<BatchProgress | null> {
+  const queue = createQueue(BATCH_QUEUE_NAME as never);
+
+  // Find the job by ID
+  const job = await queue.getJob(jobId);
+
+  if (!job) {
+    return null;
+  }
+
+  const state = await job.getState();
+  const progress = typeof job.progress === 'number' ? job.progress : 0;
+
+  // Map job state to BatchProgress status
+  let status: BatchProgress['status'];
+  switch (state) {
+    case 'waiting':
+    case 'delayed':
+      status = 'queued';
+      break;
+    case 'active':
+      status = 'processing';
+      break;
+    case 'completed':
+      status = 'completed';
+      break;
+    case 'failed':
+      status = 'failed';
+      break;
+    default:
+      status = 'queued';
+  }
+
+  // Get tree counts from job result if available
+  let processedTrees = 0;
+  let totalTrees = 0;
+
+  if (job.returnvalue) {
+    const result = job.returnvalue as BatchClassificationResult;
+    processedTrees = result.processedTrees;
+    totalTrees = result.totalTrees;
+  }
+
+  // Estimate time remaining based on progress and elapsed time
+  let estimatedTimeRemaining: number | undefined = undefined;
+  if (status === 'processing' && progress > 0) {
+    const elapsed = Date.now() - (job.processedOn ?? Date.now());
+    const estimatedTotal = (elapsed / progress) * 100;
+    estimatedTimeRemaining = Math.round((estimatedTotal - elapsed) / 1000);
+  }
+
+  const result: BatchProgress = {
+    jobId,
+    status,
+    processedTrees,
+    totalTrees,
+    percentComplete: progress,
+  };
+
+  if (estimatedTimeRemaining !== undefined) {
+    result.estimatedTimeRemaining = estimatedTimeRemaining;
+  }
+
+  return result;
+}
+
+// ============================================================================
 // Exports
 // ============================================================================
 
 export default {
   createSpeciesClassificationWorker,
+  createBatchSpeciesClassificationWorker,
   queueSpeciesClassification,
+  queueBatchSpeciesClassification,
   getSpeciesClassificationJobStatus,
+  getBatchJobProgress,
   cancelSpeciesClassification,
 };

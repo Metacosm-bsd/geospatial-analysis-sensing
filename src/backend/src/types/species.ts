@@ -409,3 +409,147 @@ export const DEFAULT_CLASSIFICATION_OPTIONS: ClassifySpeciesOptions = {
   includeUncertain: false,
   useEnsemble: true,
 };
+
+// ============================================================================
+// Sprint 15-16: Validation and Feedback Types
+// ============================================================================
+
+/**
+ * Model validation report with per-class metrics
+ */
+export interface ValidationReport {
+  /** Overall model accuracy (0-1) */
+  overallAccuracy: number;
+  /** Metrics for each species class */
+  perClassMetrics: Record<string, ClassMetrics>;
+  /** Confusion matrix (rows: actual, cols: predicted) */
+  confusionMatrix: number[][];
+  /** Labels for confusion matrix axes */
+  classLabels: string[];
+  /** Model improvement recommendations */
+  recommendations: string[];
+  /** Date of validation */
+  validationDate: string;
+}
+
+/**
+ * Classification metrics for a single species class
+ */
+export interface ClassMetrics {
+  /** Precision: TP / (TP + FP) */
+  precision: number;
+  /** Recall: TP / (TP + FN) */
+  recall: number;
+  /** F1 Score: 2 * (precision * recall) / (precision + recall) */
+  f1Score: number;
+  /** Number of samples in this class */
+  support: number;
+}
+
+/**
+ * Record of a species correction made by a user
+ */
+export interface CorrectionRecord {
+  /** Unique correction identifier */
+  id: string;
+  /** Tree detection ID that was corrected */
+  treeId: string;
+  /** Analysis ID containing the tree */
+  analysisId: string;
+  /** Original predicted species code */
+  predictedSpecies: string;
+  /** User-corrected species code */
+  correctedSpecies: string;
+  /** User who made the correction */
+  userId: string;
+  /** Original confidence score before correction */
+  confidenceWas: number;
+  /** When the correction was made */
+  timestamp: string;
+}
+
+// ============================================================================
+// Sprint 15-16: Batch Classification Types
+// ============================================================================
+
+/**
+ * Request for batch species classification
+ */
+export interface BatchClassificationRequest {
+  /** Analysis ID to classify */
+  analysisId: string;
+  /** Geographic region for species candidates */
+  region: string;
+  /** Number of trees to process per batch (default: 1000) */
+  batchSize?: number;
+}
+
+/**
+ * Progress tracking for batch classification jobs
+ */
+export interface BatchProgress {
+  /** Unique job identifier */
+  jobId: string;
+  /** Current job status */
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  /** Number of trees processed so far */
+  processedTrees: number;
+  /** Total number of trees to process */
+  totalTrees: number;
+  /** Completion percentage (0-100) */
+  percentComplete: number;
+  /** Estimated time remaining in seconds */
+  estimatedTimeRemaining?: number;
+}
+
+// ============================================================================
+// Sprint 15-16: Export Types
+// ============================================================================
+
+/**
+ * Options for exporting species classification data
+ */
+export interface SpeciesExportOptions {
+  /** Export file format */
+  format: 'csv' | 'geojson' | 'shapefile';
+  /** Include trees below confidence threshold */
+  includeUncertain: boolean;
+  /** Minimum confidence threshold for export (0-1) */
+  minConfidence: number;
+}
+
+/**
+ * Response from species data export
+ */
+export interface SpeciesExportResponse {
+  /** URL to download the exported file */
+  fileUrl: string;
+  /** File format */
+  format: 'csv' | 'geojson' | 'shapefile';
+  /** Number of trees exported */
+  treeCount: number;
+  /** File size in bytes */
+  fileSize: number;
+  /** Export timestamp */
+  exportedAt: string;
+}
+
+/**
+ * Statistics about species corrections
+ */
+export interface CorrectionStatistics {
+  /** Total number of corrections made */
+  totalCorrections: number;
+  /** Number of unique trees corrected */
+  uniqueTreesCorrected: number;
+  /** Most common correction patterns */
+  topCorrectionPatterns: Array<{
+    from: string;
+    to: string;
+    count: number;
+  }>;
+  /** Average original confidence of corrected predictions */
+  avgConfidenceBeforeCorrection: number;
+  /** Corrections by user */
+  correctionsByUser: Record<string, number>;
+}

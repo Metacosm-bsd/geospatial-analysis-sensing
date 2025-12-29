@@ -34,6 +34,12 @@ from lidar_processing.services.species_config import (
     get_species_codes_for_region,
 )
 
+# ML Validation, Calibration, and Feedback Services (Sprint 15-16)
+from lidar_processing.services.model_validator import ModelValidator
+from lidar_processing.services.confidence_calibrator import ConfidenceCalibrator, CalibratedModel
+from lidar_processing.services.feedback_collector import FeedbackCollector
+from lidar_processing.services.batch_classifier import BatchClassifier, BatchStatus, BatchJob
+
 __all__ = [
     # Core Processing Services
     "LidarValidator",
@@ -64,4 +70,12 @@ __all__ = [
     "get_region_metadata",
     "get_all_regions",
     "get_species_codes_for_region",
+    # ML Validation, Calibration, and Feedback Services
+    "ModelValidator",
+    "ConfidenceCalibrator",
+    "CalibratedModel",
+    "FeedbackCollector",
+    "BatchClassifier",
+    "BatchStatus",
+    "BatchJob",
 ]

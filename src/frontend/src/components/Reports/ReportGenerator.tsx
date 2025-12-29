@@ -1,12 +1,25 @@
+/**
+ * ReportGenerator Component
+ * Sprint 13-14: Report Generation UI
+ * Sprint 15-16: Added species breakdown section option
+ */
+
 import React, { useState } from 'react';
 import type { ReportFormat, ReportOptions } from '../../api/reports';
 import type { Analysis } from '../../types';
 
+// Extended ReportOptions for Sprint 15-16
+interface ExtendedReportOptions extends ReportOptions {
+  includeSpeciesBreakdown?: boolean;
+  includeSpeciesValidation?: boolean;
+}
+
 interface ReportGeneratorProps {
   analyses: Analysis[];
-  onGenerate: (analysisId: string, options: ReportOptions) => Promise<void>;
+  onGenerate: (analysisId: string, options: ExtendedReportOptions) => Promise<void>;
   isGenerating?: boolean;
   className?: string;
+  hasSpeciesData?: boolean;
 }
 
 export function ReportGenerator({
@@ -14,6 +27,7 @@ export function ReportGenerator({
   onGenerate,
   isGenerating = false,
   className = '',
+  hasSpeciesData = false,
 }: ReportGeneratorProps) {
   const [selectedAnalysisId, setSelectedAnalysisId] = useState<string>(
     analyses.find((a) => a.status === 'completed')?.id || ''
@@ -22,6 +36,9 @@ export function ReportGenerator({
   const [includeCharts, setIncludeCharts] = useState(true);
   const [includeTreeList, setIncludeTreeList] = useState(true);
   const [includeMethodology, setIncludeMethodology] = useState(false);
+  // Sprint 15-16: Species options
+  const [includeSpeciesBreakdown, setIncludeSpeciesBreakdown] = useState(true);
+  const [includeSpeciesValidation, setIncludeSpeciesValidation] = useState(false);
   const [units, setUnits] = useState<'metric' | 'imperial'>('metric');
   const [customTitle, setCustomTitle] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -37,11 +54,14 @@ export function ReportGenerator({
       return;
     }
 
-    const options: ReportOptions = {
+    const options: ExtendedReportOptions = {
       format,
       includeCharts,
       includeTreeList,
       includeMethodology,
+      // Sprint 15-16: Include species options
+      includeSpeciesBreakdown,
+      includeSpeciesValidation,
       units,
       ...(customTitle.trim() ? { customTitle: customTitle.trim() } : {}),
     };
@@ -188,6 +208,49 @@ export function ReportGenerator({
                 <span className="text-sm font-medium text-gray-700">Methodology Section</span>
                 <p className="text-xs text-gray-500">
                   Explain the detection and analysis methods used
+                </p>
+              </div>
+            </label>
+
+            {/* Sprint 15-16: Species sections */}
+            <div className="pt-3 mt-3 border-t border-gray-200">
+              <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Species Data
+              </span>
+            </div>
+
+            <label className={`flex items-center gap-3 cursor-pointer ${!hasSpeciesData ? 'opacity-50' : ''}`}>
+              <input
+                type="checkbox"
+                checked={includeSpeciesBreakdown}
+                onChange={(e) => setIncludeSpeciesBreakdown(e.target.checked)}
+                disabled={isGenerating || !hasSpeciesData}
+                className="w-4 h-4 text-forest-600 border-gray-300 rounded focus:ring-forest-500"
+              />
+              <div>
+                <span className="text-sm font-medium text-gray-700">Species Breakdown</span>
+                <p className="text-xs text-gray-500">
+                  {hasSpeciesData
+                    ? 'Include species distribution charts and tables'
+                    : 'Run species classification to enable this option'}
+                </p>
+              </div>
+            </label>
+
+            <label className={`flex items-center gap-3 cursor-pointer ${!hasSpeciesData ? 'opacity-50' : ''}`}>
+              <input
+                type="checkbox"
+                checked={includeSpeciesValidation}
+                onChange={(e) => setIncludeSpeciesValidation(e.target.checked)}
+                disabled={isGenerating || !hasSpeciesData}
+                className="w-4 h-4 text-forest-600 border-gray-300 rounded focus:ring-forest-500"
+              />
+              <div>
+                <span className="text-sm font-medium text-gray-700">Species Validation Metrics</span>
+                <p className="text-xs text-gray-500">
+                  {hasSpeciesData
+                    ? 'Include accuracy, precision, recall metrics'
+                    : 'Run species classification to enable this option'}
                 </p>
               </div>
             </label>

@@ -1,6 +1,7 @@
 /**
  * Species Store - Zustand store for species classification state
  * Sprint 13-14: Species Classification UI
+ * Sprint 15-16: Added correction tracking, batch progress, and validation metrics
  */
 
 import { create } from 'zustand';
@@ -11,6 +12,11 @@ import type {
   Region,
   SpeciesInfo,
   SpeciesClassificationOptions,
+  // Sprint 15-16: New types
+  SpeciesCorrection,
+  CorrectionStatistics,
+  BatchClassificationJob,
+  ValidationMetrics,
 } from '../api/species';
 
 export interface SpeciesState {
@@ -43,6 +49,20 @@ export interface SpeciesState {
   // Current analysis ID being processed
   currentAnalysisId: string | null;
 
+  // Sprint 15-16: Correction tracking state
+  corrections: SpeciesCorrection[];
+  isCorrectionsLoading: boolean;
+  correctionStatistics: CorrectionStatistics | null;
+  isStatisticsLoading: boolean;
+
+  // Sprint 15-16: Batch processing state
+  batchJob: BatchClassificationJob | null;
+  isBatchJobLoading: boolean;
+
+  // Sprint 15-16: Validation metrics state
+  validationMetrics: ValidationMetrics | null;
+  isValidationLoading: boolean;
+
   // Actions
   startClassification: (
     analysisId: string,
@@ -66,6 +86,18 @@ export interface SpeciesState {
   ) => Promise<void>;
   resetClassification: () => void;
   clearErrors: () => void;
+
+  // Sprint 15-16: New actions
+  recordCorrection: (
+    treeId: string,
+    predictedSpecies: string,
+    correctedSpecies: string
+  ) => Promise<void>;
+  fetchCorrectionHistory: (analysisId: string) => Promise<void>;
+  fetchCorrectionStatistics: () => Promise<void>;
+  startBatchClassification: (analysisId: string, region: string) => Promise<void>;
+  pollBatchProgress: (jobId: string) => Promise<void>;
+  fetchValidationMetrics: (region: string) => Promise<void>;
 }
 
 export const useSpeciesStore = create<SpeciesState>((set, get) => ({
@@ -85,6 +117,16 @@ export const useSpeciesStore = create<SpeciesState>((set, get) => ({
   selectedSpeciesFilter: [],
   speciesVisibility: {},
   currentAnalysisId: null,
+
+  // Sprint 15-16: New initial state
+  corrections: [],
+  isCorrectionsLoading: false,
+  correctionStatistics: null,
+  isStatisticsLoading: false,
+  batchJob: null,
+  isBatchJobLoading: false,
+  validationMetrics: null,
+  isValidationLoading: false,
 
   // Start species classification
   startClassification: async (analysisId, region, options) => {
@@ -321,6 +363,148 @@ export const useSpeciesStore = create<SpeciesState>((set, get) => ({
   // Clear errors
   clearErrors: () => {
     set({ classificationError: null });
+  },
+
+  // Sprint 15-16: Record a species correction
+  recordCorrection: async (treeId, predictedSpecies, correctedSpecies) => {
+    try {
+      const correction = await speciesApi.recordSpeciesCorrection(
+        treeId,
+        predictedSpecies,
+        correctedSpecies
+      );
+
+      // Add to corrections list
+      set((state) => ({
+        corrections: [correction, ...state.corrections],
+      }));
+
+      // Also update the local prediction
+      set((state) => ({
+        predictions: state.predictions.map((p) =>
+          p.treeId === treeId
+            ? { ...p, speciesCode: correctedSpecies, speciesName: correctedSpecies }
+            : p
+        ),
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to record correction';
+      set({ classificationError: message });
+      throw error;
+    }
+  },
+
+  // Sprint 15-16: Fetch correction history for an analysis
+  fetchCorrectionHistory: async (analysisId) => {
+    set({ isCorrectionsLoading: true });
+
+    try {
+      const corrections = await speciesApi.getCorrectionHistory(analysisId);
+      set({
+        corrections,
+        isCorrectionsLoading: false,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to fetch corrections';
+      set({
+        classificationError: message,
+        isCorrectionsLoading: false,
+      });
+    }
+  },
+
+  // Sprint 15-16: Fetch correction statistics
+  fetchCorrectionStatistics: async () => {
+    set({ isStatisticsLoading: true });
+
+    try {
+      const statistics = await speciesApi.getCorrectionStatistics();
+      set({
+        correctionStatistics: statistics,
+        isStatisticsLoading: false,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to fetch statistics';
+      set({
+        classificationError: message,
+        isStatisticsLoading: false,
+      });
+    }
+  },
+
+  // Sprint 15-16: Start batch classification
+  startBatchClassification: async (analysisId, region) => {
+    set({ isBatchJobLoading: true, batchJob: null });
+
+    try {
+      const job = await speciesApi.startBatchClassification(analysisId, region);
+      set({
+        batchJob: job,
+        isBatchJobLoading: false,
+      });
+
+      // Start polling for progress if job started successfully
+      if (job.status === 'processing' || job.status === 'queued') {
+        get().pollBatchProgress(job.jobId);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to start batch classification';
+      set({
+        classificationError: message,
+        isBatchJobLoading: false,
+      });
+    }
+  },
+
+  // Sprint 15-16: Poll batch job progress
+  pollBatchProgress: async (jobId) => {
+    const pollInterval = 2000;
+    const maxAttempts = 150;
+    let attempts = 0;
+
+    const poll = async (): Promise<void> => {
+      attempts++;
+      try {
+        const job = await speciesApi.getBatchProgress(jobId);
+        set({ batchJob: job });
+
+        if (job.status === 'completed' || job.status === 'failed') {
+          return;
+        }
+
+        if (attempts >= maxAttempts) {
+          set({ classificationError: 'Batch job polling timeout' });
+          return;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+        return poll();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to get batch progress';
+        set({ classificationError: message });
+      }
+    };
+
+    await poll();
+  },
+
+  // Sprint 15-16: Fetch validation metrics for a region
+  fetchValidationMetrics: async (region) => {
+    set({ isValidationLoading: true });
+
+    try {
+      const metrics = await speciesApi.getValidationMetrics(region);
+      set({
+        validationMetrics: metrics,
+        isValidationLoading: false,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to fetch validation metrics';
+      set({
+        classificationError: message,
+        isValidationLoading: false,
+      });
+    }
   },
 }));
 

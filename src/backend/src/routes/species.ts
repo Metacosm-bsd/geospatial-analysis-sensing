@@ -1,6 +1,6 @@
 /**
- * Species Routes - Sprint 13-14
- * API endpoints for species classification and management
+ * Species Routes - Sprint 13-16
+ * API endpoints for species classification, feedback, batch processing, and export
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express';
@@ -8,7 +8,15 @@ import { z } from 'zod';
 import { authenticateToken } from '../middleware/auth.js';
 import { logger } from '../config/logger.js';
 import * as speciesService from '../services/species.service.js';
-import { isValidRegion, type SupportedRegion } from '../types/species.js';
+import * as speciesFeedbackService from '../services/speciesFeedback.service.js';
+import * as speciesExportService from '../services/speciesExport.service.js';
+import {
+  isValidRegion,
+  type SupportedRegion,
+  type BatchClassificationRequest,
+  type BatchProgress,
+  type SpeciesExportOptions,
+} from '../types/species.js';
 
 const router = Router();
 
@@ -36,6 +44,27 @@ const UpdateTreeSpeciesSchema = z.object({
   speciesName: z.string().optional(),
   verified: z.boolean().optional(),
 });
+
+// Sprint 15-16: New Schemas
+const CorrectionSchema = z.object({
+  treeId: z.string().uuid(),
+  predictedSpecies: z.string().min(2).max(10),
+  correctedSpecies: z.string().min(2).max(10),
+});
+
+const BatchClassificationSchema = z.object({
+  analysisId: z.string().uuid(),
+  region: z.enum(['pnw', 'southeast', 'northeast', 'rocky_mountain']),
+  batchSize: z.number().min(100).max(10000).optional(),
+});
+
+// ExportOptionsSchema - used for query parameter validation in export endpoint
+const _ExportOptionsSchema = z.object({
+  format: z.enum(['csv', 'geojson', 'shapefile']),
+  includeUncertain: z.boolean().default(false),
+  minConfidence: z.number().min(0).max(1).default(0.7),
+});
+void _ExportOptionsSchema; // Suppress unused warning - schema available for future use
 
 // ============================================================================
 // Validation Middleware
@@ -390,6 +419,449 @@ router.patch(
         success: false,
         error: 'Failed to update tree species',
         message: 'An error occurred while updating the tree species',
+      });
+    }
+  }
+);
+
+// ============================================================================
+// Sprint 15-16: Feedback Endpoints
+// ============================================================================
+
+/**
+ * POST /api/v1/species/feedback/correction
+ * Record a species correction
+ */
+router.post(
+  '/feedback/correction',
+  validateBody(CorrectionSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+        });
+        return;
+      }
+
+      const { treeId, predictedSpecies, correctedSpecies } = req.body;
+
+      const correction = await speciesFeedbackService.recordCorrection(
+        treeId,
+        predictedSpecies,
+        correctedSpecies,
+        userId
+      );
+
+      res.status(201).json({
+        success: true,
+        message: 'Correction recorded successfully',
+        data: correction,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to record correction';
+      logger.error('Error recording species correction:', error);
+
+      if (message.includes('not found')) {
+        res.status(404).json({
+          success: false,
+          error: 'Tree not found',
+          message: 'The specified tree detection does not exist',
+        });
+        return;
+      }
+
+      if (message.includes('Access denied')) {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied',
+          message: 'You do not have permission to correct this tree',
+        });
+        return;
+      }
+
+      res.status(500).json({
+        success: false,
+        error: 'Failed to record correction',
+        message: 'An error occurred while recording the correction',
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/species/feedback/:analysisId
+ * Get correction history for an analysis
+ */
+router.get(
+  '/feedback/:analysisId',
+  validateUUID('analysisId'),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      const analysisId = req.params.analysisId!;
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+        });
+        return;
+      }
+
+      const corrections = await speciesFeedbackService.getCorrectionHistory(
+        analysisId,
+        userId
+      );
+
+      res.status(200).json({
+        success: true,
+        data: corrections,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to get corrections';
+      logger.error('Error getting correction history:', error);
+
+      if (message.includes('not found')) {
+        res.status(404).json({
+          success: false,
+          error: 'Analysis not found',
+          message: 'The specified analysis does not exist',
+        });
+        return;
+      }
+
+      if (message.includes('Access denied')) {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied',
+          message: 'You do not have permission to access this analysis',
+        });
+        return;
+      }
+
+      res.status(500).json({
+        success: false,
+        error: 'Failed to get corrections',
+        message: 'An error occurred while fetching correction history',
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/species/feedback/statistics
+ * Get correction statistics
+ */
+router.get(
+  '/feedback/statistics',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+        });
+        return;
+      }
+
+      const statistics = await speciesFeedbackService.getCorrectionStatistics();
+
+      res.status(200).json({
+        success: true,
+        data: statistics,
+      });
+    } catch (error) {
+      logger.error('Error getting correction statistics:', error);
+
+      res.status(500).json({
+        success: false,
+        error: 'Failed to get statistics',
+        message: 'An error occurred while fetching correction statistics',
+      });
+    }
+  }
+);
+
+// ============================================================================
+// Sprint 15-16: Batch Classification Endpoints
+// ============================================================================
+
+// Store for batch job progress (in production, use Redis)
+const batchJobProgress = new Map<string, BatchProgress>();
+
+/**
+ * POST /api/v1/species/classify-batch
+ * Start batch species classification
+ */
+router.post(
+  '/classify-batch',
+  validateBody(BatchClassificationSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+        });
+        return;
+      }
+
+      const { analysisId, region, batchSize } = req.body as BatchClassificationRequest;
+
+      // Start batch classification job
+      const { queueBatchSpeciesClassification } = await import('../jobs/speciesClassification.job.js');
+      const jobId = await queueBatchSpeciesClassification(
+        analysisId,
+        region as SupportedRegion,
+        userId,
+        batchSize ?? 1000
+      );
+
+      // Initialize progress tracking
+      batchJobProgress.set(jobId, {
+        jobId,
+        status: 'queued',
+        processedTrees: 0,
+        totalTrees: 0,
+        percentComplete: 0,
+      });
+
+      res.status(202).json({
+        success: true,
+        message: 'Batch classification started',
+        data: {
+          jobId,
+          status: 'queued',
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to start batch classification';
+      logger.error('Error starting batch classification:', error);
+
+      if (message.includes('not found')) {
+        res.status(404).json({
+          success: false,
+          error: 'Analysis not found',
+          message: 'The specified analysis does not exist',
+        });
+        return;
+      }
+
+      if (message.includes('Access denied')) {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied',
+          message: 'You do not have permission to classify this analysis',
+        });
+        return;
+      }
+
+      res.status(500).json({
+        success: false,
+        error: 'Failed to start batch classification',
+        message: 'An error occurred while starting batch classification',
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/species/batch/:jobId/progress
+ * Get batch classification progress
+ */
+router.get(
+  '/batch/:jobId/progress',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      const jobId = req.params.jobId;
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+        });
+        return;
+      }
+
+      if (!jobId) {
+        res.status(400).json({
+          success: false,
+          error: 'Invalid request',
+          message: 'Job ID is required',
+        });
+        return;
+      }
+
+      // Get progress from job queue
+      const { getBatchJobProgress } = await import('../jobs/speciesClassification.job.js');
+      const progress = await getBatchJobProgress(jobId);
+
+      if (!progress) {
+        // Check in-memory cache
+        const cachedProgress = batchJobProgress.get(jobId);
+        if (cachedProgress) {
+          res.status(200).json({
+            success: true,
+            data: cachedProgress,
+          });
+          return;
+        }
+
+        res.status(404).json({
+          success: false,
+          error: 'Job not found',
+          message: 'The specified batch job does not exist',
+        });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        data: progress,
+      });
+    } catch (error) {
+      logger.error('Error getting batch progress:', error);
+
+      res.status(500).json({
+        success: false,
+        error: 'Failed to get progress',
+        message: 'An error occurred while fetching batch progress',
+      });
+    }
+  }
+);
+
+// ============================================================================
+// Sprint 15-16: Export Endpoints
+// ============================================================================
+
+/**
+ * GET /api/v1/species/export/:analysisId
+ * Export species classification data
+ */
+router.get(
+  '/export/:analysisId',
+  validateUUID('analysisId'),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      const analysisId = req.params.analysisId!;
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+        });
+        return;
+      }
+
+      // Parse query params for export options
+      const format = (req.query.format as string) ?? 'csv';
+      const includeUncertain = req.query.includeUncertain === 'true';
+      const minConfidence = parseFloat(req.query.minConfidence as string) || 0.7;
+
+      // Validate format
+      if (!['csv', 'geojson', 'shapefile'].includes(format)) {
+        res.status(400).json({
+          success: false,
+          error: 'Invalid format',
+          message: 'Format must be one of: csv, geojson, shapefile',
+        });
+        return;
+      }
+
+      const options: SpeciesExportOptions = {
+        format: format as 'csv' | 'geojson' | 'shapefile',
+        includeUncertain,
+        minConfidence,
+      };
+
+      const result = await speciesExportService.exportSpeciesData(
+        analysisId,
+        options,
+        userId
+      );
+
+      res.status(200).json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to export data';
+      logger.error('Error exporting species data:', error);
+
+      if (message.includes('not found')) {
+        res.status(404).json({
+          success: false,
+          error: 'Analysis not found',
+          message: 'The specified analysis does not exist',
+        });
+        return;
+      }
+
+      if (message.includes('Access denied')) {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied',
+          message: 'You do not have permission to export this analysis',
+        });
+        return;
+      }
+
+      res.status(500).json({
+        success: false,
+        error: 'Failed to export data',
+        message: 'An error occurred while exporting species data',
+      });
+    }
+  }
+);
+
+// ============================================================================
+// Sprint 15-16: Validation Metrics Endpoint
+// ============================================================================
+
+/**
+ * GET /api/v1/species/validation/:region
+ * Get model validation metrics for a region
+ */
+router.get(
+  '/validation/:region',
+  validateRegion,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      const region = req.params.region as SupportedRegion;
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+        });
+        return;
+      }
+
+      // Get validation metrics from Python service or use cached/simulated data
+      const { getValidationMetrics } = await import('../services/species.service.js');
+      const metrics = await getValidationMetrics(region);
+
+      res.status(200).json({
+        success: true,
+        data: metrics,
+      });
+    } catch (error) {
+      logger.error('Error getting validation metrics:', error);
+
+      res.status(500).json({
+        success: false,
+        error: 'Failed to get validation metrics',
+        message: 'An error occurred while fetching validation metrics',
       });
     }
   }

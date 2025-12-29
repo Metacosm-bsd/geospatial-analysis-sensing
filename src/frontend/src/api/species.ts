@@ -207,3 +207,209 @@ export async function pollClassificationStatus(
 
   return poll();
 }
+
+// ============================================================
+// Sprint 15-16: Species Enhancement Functions
+// ============================================================
+
+/**
+ * Species correction record
+ */
+export interface SpeciesCorrection {
+  id: string;
+  treeId: string;
+  predictedSpecies: string;
+  correctedSpecies: string;
+  userId: string;
+  userName: string;
+  createdAt: string;
+  analysisId?: string;
+}
+
+/**
+ * Correction statistics
+ */
+export interface CorrectionStatistics {
+  totalCorrections: number;
+  correctionsBySpecies: Array<{
+    predictedSpecies: string;
+    correctedSpecies: string;
+    count: number;
+  }>;
+  mostCorrectedSpecies: Array<{
+    speciesCode: string;
+    speciesName: string;
+    correctionCount: number;
+  }>;
+  averageCorrectionsPerDay: number;
+  lastCorrectionAt?: string;
+}
+
+/**
+ * Batch classification job
+ */
+export interface BatchClassificationJob {
+  jobId: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  progress: number;
+  treesProcessed: number;
+  totalTrees: number;
+  startedAt?: string;
+  completedAt?: string;
+  error?: string;
+}
+
+/**
+ * Species export options
+ */
+export interface SpeciesExportOptions {
+  format: 'csv' | 'geojson' | 'shapefile';
+  confidenceThreshold?: number;
+  includeUncertain?: boolean;
+  speciesFilter?: string[];
+}
+
+/**
+ * Validation metrics for species classification
+ */
+export interface ValidationMetrics {
+  overallAccuracy: number;
+  validationDate: string;
+  totalValidated: number;
+  perSpeciesMetrics: Array<{
+    speciesCode: string;
+    speciesName: string;
+    precision: number;
+    recall: number;
+    f1Score: number;
+    support: number;
+  }>;
+  confusionMatrix: {
+    labels: string[];
+    matrix: number[][];
+  };
+  recommendations: string[];
+}
+
+/**
+ * Record a species correction from user feedback
+ */
+export async function recordSpeciesCorrection(
+  treeId: string,
+  predictedSpecies: string,
+  correctedSpecies: string
+): Promise<SpeciesCorrection> {
+  try {
+    const response = await apiClient.post<SpeciesCorrection>(
+      `/trees/${treeId}/species/correction`,
+      {
+        predictedSpecies,
+        correctedSpecies,
+      }
+    );
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+/**
+ * Get correction history for an analysis
+ */
+export async function getCorrectionHistory(
+  analysisId: string
+): Promise<SpeciesCorrection[]> {
+  try {
+    const response = await apiClient.get<{ corrections: SpeciesCorrection[] }>(
+      `/analyses/${analysisId}/species/corrections`
+    );
+    return response.data.corrections;
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+/**
+ * Get overall correction statistics
+ */
+export async function getCorrectionStatistics(): Promise<CorrectionStatistics> {
+  try {
+    const response = await apiClient.get<CorrectionStatistics>(
+      '/species/corrections/statistics'
+    );
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+/**
+ * Start a batch species classification job
+ */
+export async function startBatchClassification(
+  analysisId: string,
+  region: string
+): Promise<BatchClassificationJob> {
+  try {
+    const response = await apiClient.post<BatchClassificationJob>(
+      `/analyses/${analysisId}/species/batch-classify`,
+      { region }
+    );
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+/**
+ * Get batch classification job progress
+ */
+export async function getBatchProgress(
+  jobId: string
+): Promise<BatchClassificationJob> {
+  try {
+    const response = await apiClient.get<BatchClassificationJob>(
+      `/species/batch-jobs/${jobId}`
+    );
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+/**
+ * Export species data in various formats
+ */
+export async function exportSpeciesData(
+  analysisId: string,
+  options: SpeciesExportOptions
+): Promise<Blob> {
+  try {
+    const response = await apiClient.post(
+      `/analyses/${analysisId}/species/export`,
+      options,
+      {
+        responseType: 'blob',
+      }
+    );
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+/**
+ * Get validation metrics for a region
+ */
+export async function getValidationMetrics(
+  region: string
+): Promise<ValidationMetrics> {
+  try {
+    const response = await apiClient.get<ValidationMetrics>(
+      `/species/regions/${region}/validation`
+    );
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}

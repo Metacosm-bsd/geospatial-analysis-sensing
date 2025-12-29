@@ -35,6 +35,7 @@ model User {
 
   // Relations
   projects          Project[]
+  speciesCorrections SpeciesCorrection[]
 
   // Timestamps
   createdAt         DateTime  @default(now()) @map("created_at")
@@ -354,12 +355,45 @@ model TreeDetection {
   biomass           Float?   // Above-ground biomass in kg
   carbon            Float?   // Carbon content in kg
 
+  // Species corrections (Sprint 15-16)
+  speciesCorrections SpeciesCorrection[]
+
   // Timestamps
   createdAt         DateTime @default(now()) @map("created_at")
 
   @@index([analysisId])
   @@index([speciesCode])
   @@map("tree_detections")
+}
+
+// ============================================================================
+// Species Correction (Sprint 15-16)
+// ============================================================================
+
+model SpeciesCorrection {
+  id                String        @id @default(uuid())
+
+  // Relation to tree detection
+  treeDetectionId   String        @map("tree_detection_id")
+  treeDetection     TreeDetection @relation(fields: [treeDetectionId], references: [id], onDelete: Cascade)
+
+  // Correction details
+  predictedSpecies  String        @map("predicted_species")  // Original predicted species code
+  correctedSpecies  String        @map("corrected_species")  // User-corrected species code
+  confidenceWas     Float         @map("confidence_was")     // Original confidence before correction
+
+  // User who made the correction
+  userId            String        @map("user_id")
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Timestamps
+  createdAt         DateTime      @default(now()) @map("created_at")
+
+  @@index([treeDetectionId])
+  @@index([userId])
+  @@index([predictedSpecies])
+  @@index([correctedSpecies])
+  @@map("species_corrections")
 }
 
 // ============================================================================

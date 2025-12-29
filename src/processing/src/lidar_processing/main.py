@@ -21,8 +21,13 @@ from fastapi.responses import JSONResponse
 from lidar_processing import __version__
 from lidar_processing.config import Settings, configure_logging, get_settings
 from lidar_processing.models import (
+    BatchClassifyRequest,
+    BatchProgress,
+    BatchResult,
     ClassifySpeciesRequest,
     ClassifySpeciesResponse,
+    CorrectionRecord,
+    CorrectionStats,
     ErrorResponse,
     ExtractMetadataRequest,
     GenerateReportRequest,
@@ -33,6 +38,7 @@ from lidar_processing.models import (
     LabeledTree,
     LidarMetadata,
     QueueJobRequest,
+    RecordCorrectionRequest,
     RegionInfo,
     ReportResult,
     ReportStatus,
@@ -40,11 +46,17 @@ from lidar_processing.models import (
     TrainClassifierRequest,
     TrainClassifierResponse,
     TreeMetrics,
+    ValidateModelRequest,
     ValidateRequest,
+    ValidationReport,
     ValidationResult,
 )
+from lidar_processing.services.batch_classifier import BatchClassifier
+from lidar_processing.services.confidence_calibrator import ConfidenceCalibrator
+from lidar_processing.services.feedback_collector import FeedbackCollector
 from lidar_processing.services.lidar_validator import LidarValidator
 from lidar_processing.services.metadata_extractor import MetadataExtractor
+from lidar_processing.services.model_validator import ModelValidator
 from lidar_processing.services.point_extractor import PointExtractor
 from lidar_processing.services.report_generator import ReportGenerator
 from lidar_processing.services.species_classifier import SpeciesClassifier
@@ -65,6 +77,10 @@ _redis_client: redis.Redis | None = None
 _queue_worker: QueueWorker | None = None
 _report_generator: ReportGenerator | None = None
 _species_classifiers: dict[str, SpeciesClassifier] = {}
+_model_validators: dict[str, ModelValidator] = {}
+_confidence_calibrators: dict[str, ConfidenceCalibrator] = {}
+_feedback_collector: FeedbackCollector | None = None
+_batch_classifiers: dict[str, BatchClassifier] = {}
 
 
 @asynccontextmanager
@@ -74,7 +90,7 @@ async def lifespan(app: FastAPI):
 
     Handles startup and shutdown events.
     """
-    global _start_time, _redis_client, _queue_worker, _report_generator
+    global _start_time, _redis_client, _queue_worker, _report_generator, _feedback_collector
 
     # Startup
     settings = get_settings()
@@ -104,6 +120,9 @@ async def lifespan(app: FastAPI):
     if _redis_client:
         _queue_worker = QueueWorker(settings)
         _queue_worker.redis_client = _redis_client
+
+    # Initialize feedback collector (Sprint 15-16)
+    _feedback_collector = FeedbackCollector(settings=settings, redis_client=_redis_client)
 
     logger.info("LiDAR Processing Service started (version %s)", __version__)
 
@@ -1124,6 +1143,396 @@ def _register_routes(app: FastAPI, settings: Settings) -> None:
         except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
+    # ========================================================================
+    # Model Validation Endpoints (Sprint 15-16)
+    # ========================================================================
+
+    def _get_model_validator(region: str) -> ModelValidator:
+        """Get or create a model validator for the given region."""
+        if region not in _model_validators:
+            _model_validators[region] = ModelValidator(settings)
+        return _model_validators[region]
+
+    def _get_batch_classifier(region: str) -> BatchClassifier:
+        """Get or create a batch classifier for the given region."""
+        if region not in _batch_classifiers:
+            classifier = _get_classifier(region)
+            _batch_classifiers[region] = BatchClassifier(
+                classifier=classifier,
+                region=region,
+                settings=settings,
+                redis_client=_redis_client,
+            )
+        return _batch_classifiers[region]
+
+    @app.post(
+        "/api/v1/classifier/validate",
+        response_model=ValidationReport,
+        tags=["Model Validation"],
+        summary="Run validation on test set",
+        description="""
+        Runs comprehensive validation on a species classification model
+        using provided labeled test data.
+
+        Returns detailed metrics including:
+        - Overall accuracy
+        - Per-class precision, recall, and F1 scores
+        - Confusion matrix
+        - Actionable recommendations for improvement
+        """,
+        responses={
+            200: {"description": "Validation completed successfully"},
+            400: {"description": "Invalid request parameters"},
+        },
+    )
+    async def validate_model(
+        request: ValidateModelRequest,
+    ) -> ValidationReport:
+        """Run validation on a species classification model."""
+        try:
+            classifier = _get_classifier(request.region.lower())
+            validator = _get_model_validator(request.region.lower())
+
+            report = validator.validate_model(
+                model=classifier,
+                test_data=request.test_data,
+            )
+
+            return report
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("Model validation failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Validation failed: {str(e)}",
+            )
+
+    @app.get(
+        "/api/v1/classifier/{region}/metrics",
+        tags=["Model Validation"],
+        summary="Get current model metrics",
+        description="""
+        Returns the current performance metrics for a region's classifier,
+        including calibration information and uncertainty estimates.
+        """,
+        responses={
+            200: {"description": "Metrics returned successfully"},
+            400: {"description": "Invalid region"},
+        },
+    )
+    async def get_model_metrics(region: str) -> dict[str, Any]:
+        """Get current model metrics for a region."""
+        try:
+            classifier = _get_classifier(region.lower())
+
+            # Get basic model info
+            model_info = {
+                "region": region.lower(),
+                "is_trained": classifier.is_trained,
+                "n_classes": classifier.n_classes,
+                "supported_species": classifier.get_supported_species(),
+            }
+
+            # Add feature importances if available
+            if classifier.is_trained:
+                model_info["feature_importances"] = classifier.get_feature_importances()
+
+            return model_info
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
+    # ========================================================================
+    # Feedback Collection Endpoints (Sprint 15-16)
+    # ========================================================================
+
+    @app.post(
+        "/api/v1/feedback/correction",
+        response_model=CorrectionRecord,
+        tags=["Feedback"],
+        summary="Record user correction",
+        description="""
+        Records a user's correction to a species prediction.
+
+        These corrections are accumulated for potential model retraining
+        and are used to identify which species are most often misclassified.
+        """,
+        responses={
+            200: {"description": "Correction recorded successfully"},
+            400: {"description": "Invalid request parameters"},
+        },
+    )
+    async def record_correction(
+        request: RecordCorrectionRequest,
+        user_id: str = "anonymous",
+    ) -> CorrectionRecord:
+        """Record a user correction to a species prediction."""
+        if not _feedback_collector:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Feedback collector not initialized",
+            )
+
+        try:
+            record = _feedback_collector.record_correction(
+                tree_id=request.tree_id,
+                predicted=request.predicted_species,
+                corrected=request.corrected_species,
+                user_id=user_id,
+                analysis_id=request.analysis_id,
+                confidence_was=request.confidence_was,
+                notes=request.notes,
+            )
+
+            return record
+
+        except Exception as e:
+            logger.exception("Failed to record correction: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to record correction: {str(e)}",
+            )
+
+    @app.get(
+        "/api/v1/feedback/statistics",
+        response_model=CorrectionStats,
+        tags=["Feedback"],
+        summary="Get correction statistics",
+        description="""
+        Returns statistics about accumulated corrections, including:
+        - Total corrections recorded
+        - Most frequently confused species pairs
+        - Corrections by user
+        - Recent trend
+        """,
+        responses={
+            200: {"description": "Statistics returned successfully"},
+        },
+    )
+    async def get_correction_statistics() -> CorrectionStats:
+        """Get statistics about accumulated corrections."""
+        if not _feedback_collector:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Feedback collector not initialized",
+            )
+
+        try:
+            stats = _feedback_collector.calculate_correction_statistics()
+            return stats
+
+        except Exception as e:
+            logger.exception("Failed to get correction statistics: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to get statistics: {str(e)}",
+            )
+
+    @app.get(
+        "/api/v1/feedback/export",
+        tags=["Feedback"],
+        summary="Export corrections",
+        description="""
+        Exports accumulated corrections in the specified format
+        for external training or analysis.
+        """,
+        responses={
+            200: {"description": "Corrections exported successfully"},
+            400: {"description": "Invalid format"},
+        },
+    )
+    async def export_corrections(
+        format: str = "csv",
+    ) -> Any:
+        """Export corrections for external training."""
+        from fastapi.responses import Response
+
+        if not _feedback_collector:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Feedback collector not initialized",
+            )
+
+        try:
+            data = _feedback_collector.export_corrections(format=format)
+
+            if format.lower() == "csv":
+                media_type = "text/csv"
+                filename = "corrections.csv"
+            else:
+                media_type = "application/json"
+                filename = "corrections.json"
+
+            return Response(
+                content=data,
+                media_type=media_type,
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
+    # ========================================================================
+    # Batch Classification Endpoints (Sprint 15-16)
+    # ========================================================================
+
+    @app.post(
+        "/api/v1/classify-batch",
+        tags=["Batch Classification"],
+        summary="Batch classification with progress",
+        description="""
+        Classifies multiple trees in batches with progress tracking.
+
+        For synchronous processing, returns predictions directly.
+        For async processing (async_processing=true), returns a job ID
+        that can be used to check progress and retrieve results.
+        """,
+        responses={
+            200: {"description": "Classification completed or job queued"},
+            400: {"description": "Invalid request parameters"},
+        },
+    )
+    async def classify_batch(
+        request: BatchClassifyRequest,
+    ) -> dict[str, Any]:
+        """Classify trees in batches."""
+        try:
+            batch_classifier = _get_batch_classifier(request.region.lower())
+
+            if request.async_processing:
+                # Async processing - return job ID
+                if not request.analysis_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="analysis_id is required for async processing",
+                    )
+
+                job_id = batch_classifier.classify_analysis_async(
+                    analysis_id=request.analysis_id,
+                    trees=request.tree_features,
+                )
+
+                return {
+                    "job_id": job_id,
+                    "status": "queued",
+                    "total_trees": len(request.tree_features),
+                    "async": True,
+                }
+
+            else:
+                # Synchronous processing
+                start_time = time.time()
+
+                predictions = batch_classifier.classify_batch(
+                    trees=request.tree_features,
+                    batch_size=request.batch_size,
+                    use_heuristics=request.use_heuristics,
+                )
+
+                processing_time = (time.time() - start_time) * 1000
+
+                # Calculate summary statistics
+                species_counts: dict[str, int] = {}
+                confidence_sum = 0.0
+                for pred in predictions:
+                    species_counts[pred.species_code] = species_counts.get(pred.species_code, 0) + 1
+                    confidence_sum += pred.confidence
+
+                avg_confidence = confidence_sum / len(predictions) if predictions else 0.0
+
+                return {
+                    "predictions": [p.model_dump() for p in predictions],
+                    "total_trees": len(predictions),
+                    "species_distribution": species_counts,
+                    "average_confidence": round(avg_confidence, 4),
+                    "processing_time_ms": round(processing_time, 2),
+                    "async": False,
+                }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("Batch classification failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Classification failed: {str(e)}",
+            )
+
+    @app.get(
+        "/api/v1/classify-batch/{job_id}/progress",
+        response_model=BatchProgress,
+        tags=["Batch Classification"],
+        summary="Get batch job progress",
+        description="Returns the progress of an async batch classification job.",
+        responses={
+            200: {"description": "Progress returned successfully"},
+            404: {"description": "Job not found"},
+        },
+    )
+    async def get_batch_progress(
+        job_id: str,
+        region: str = "pnw",
+    ) -> BatchProgress:
+        """Get progress of a batch classification job."""
+        try:
+            batch_classifier = _get_batch_classifier(region.lower())
+            progress = batch_classifier.get_batch_progress(job_id)
+            return progress
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(e),
+            )
+
+    @app.get(
+        "/api/v1/classify-batch/{job_id}/result",
+        response_model=BatchResult,
+        tags=["Batch Classification"],
+        summary="Get batch job result",
+        description="Returns the result of a completed batch classification job.",
+        responses={
+            200: {"description": "Result returned successfully"},
+            404: {"description": "Job not found or not complete"},
+        },
+    )
+    async def get_batch_result(
+        job_id: str,
+        region: str = "pnw",
+    ) -> BatchResult:
+        """Get result of a completed batch classification job."""
+        try:
+            batch_classifier = _get_batch_classifier(region.lower())
+            result = batch_classifier.get_batch_result(job_id)
+
+            if result is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Job {job_id} not found or not yet complete",
+                )
+
+            return result
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
                 detail=str(e),
             )
 

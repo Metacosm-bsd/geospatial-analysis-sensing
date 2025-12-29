@@ -10,6 +10,7 @@ import {
   ViewerSettings,
 } from '../store/viewerStore';
 import { useProjectStore } from '../store/projectStore';
+import { useSpeciesStore } from '../store/speciesStore';
 import {
   MeasurementTools,
   MeasurementLine,
@@ -17,6 +18,8 @@ import {
   MeasurementPolygon,
   MeasurementPolygonPreview,
 } from '../components/PointCloudViewer';
+import { SpeciesFilter } from '../components/Species/SpeciesFilter';
+import { getSpeciesName, getSpeciesColor } from '../components/Species/speciesColors';
 
 // Loading spinner
 function LoadingSpinner({ message = 'Loading...' }: { message?: string }) {
@@ -358,6 +361,9 @@ interface TreeItemProps {
 }
 
 function TreeItem({ tree, selected, onSelect, onFocus }: TreeItemProps) {
+  const speciesColor = tree.species ? getSpeciesColor(tree.species) : '#9E9E9E';
+  const speciesName = tree.species ? getSpeciesName(tree.species) : `Tree ${tree.id.slice(0, 6)}`;
+
   return (
     <button
       onClick={onSelect}
@@ -368,19 +374,18 @@ function TreeItem({ tree, selected, onSelect, onFocus }: TreeItemProps) {
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-full bg-forest-100 flex items-center justify-center">
-            <svg className="w-4 h-4 text-forest-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"
-              />
-            </svg>
+          <div
+            className="w-6 h-6 rounded-full flex items-center justify-center"
+            style={{ backgroundColor: `${speciesColor}20` }}
+          >
+            <div
+              className="w-3 h-3 rounded-full"
+              style={{ backgroundColor: speciesColor }}
+            />
           </div>
           <div>
             <div className="text-sm font-medium text-gray-900">
-              {tree.species || `Tree ${tree.id.slice(0, 6)}`}
+              {speciesName}
             </div>
             <div className="text-xs text-gray-500">
               H: {tree.height.toFixed(1)}m, D: {tree.crownDiameter.toFixed(1)}m
@@ -611,8 +616,15 @@ export function Viewer() {
     currentFile,
   } = useViewerStore();
 
-  const [activePanel, setActivePanel] = useState<'files' | 'trees' | 'measurements'>('files');
+  const [activePanel, setActivePanel] = useState<'files' | 'trees' | 'species' | 'measurements'>('files');
   const [selectedFileId, setSelectedFileId] = useState<string | null>(fileId || null);
+
+  // Sprint 15-16: Species store integration
+  const {
+    speciesBreakdown,
+    selectedSpeciesFilter,
+    setSelectedSpeciesFilter,
+  } = useSpeciesStore();
 
   // Fetch project and files on mount
   useEffect(() => {
@@ -745,9 +757,10 @@ export function Viewer() {
           {/* Panel tabs */}
           <div className="flex border-b border-gray-200">
             {[
-              { id: 'files' as const, label: 'Files', icon: '📁' },
-              { id: 'trees' as const, label: 'Trees', icon: '🌲' },
-              { id: 'measurements' as const, label: 'Measure', icon: '📐' },
+              { id: 'files' as const, label: 'Files' },
+              { id: 'trees' as const, label: 'Trees' },
+              { id: 'species' as const, label: 'Species' },
+              { id: 'measurements' as const, label: 'Measure' },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -759,6 +772,12 @@ export function Viewer() {
                 }`}
               >
                 {tab.label}
+                {/* Sprint 15-16: Show filter badge on Species tab */}
+                {tab.id === 'species' && selectedSpeciesFilter.length > 0 && (
+                  <span className="ml-1 inline-flex items-center justify-center w-4 h-4 text-xs font-semibold bg-forest-500 text-white rounded-full">
+                    {selectedSpeciesFilter.length}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -809,6 +828,25 @@ export function Viewer() {
                       onFocus={() => focusOnTree(tree.id)}
                     />
                   ))
+                )}
+              </div>
+            )}
+
+            {/* Sprint 15-16: Species filter panel */}
+            {activePanel === 'species' && (
+              <div className="space-y-3">
+                {speciesBreakdown.length === 0 ? (
+                  <div className="text-center py-8 text-gray-400">
+                    <svg className="w-12 h-12 mx-auto mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                    </svg>
+                    <p className="text-sm">No species data</p>
+                    <p className="text-xs mt-1">Run species classification first</p>
+                  </div>
+                ) : (
+                  <SpeciesFilter
+                    onFilterChange={(codes) => setSelectedSpeciesFilter(codes)}
+                  />
                 )}
               </div>
             )}

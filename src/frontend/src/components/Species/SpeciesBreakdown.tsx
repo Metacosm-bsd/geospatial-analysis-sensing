@@ -1,6 +1,7 @@
 /**
  * SpeciesBreakdown Component
  * Sprint 13-14: Species Classification UI
+ * Sprint 15-16: Added accuracy indicator and validation metrics link
  *
  * Displays species distribution with pie chart, bar chart, and interactive legend.
  * Allows filtering by species when clicked.
@@ -9,7 +10,7 @@
 import { useMemo, useCallback } from 'react';
 import { useSpeciesStore } from '../../store/speciesStore';
 import { getSpeciesColor, getSpeciesName } from './speciesColors';
-import type { SpeciesBreakdownItem } from '../../api/species';
+import type { SpeciesBreakdownItem, ValidationMetrics } from '../../api/species';
 
 interface SpeciesBreakdownProps {
   breakdown?: SpeciesBreakdownItem[];
@@ -17,6 +18,9 @@ interface SpeciesBreakdownProps {
   showPieChart?: boolean;
   showBarChart?: boolean;
   className?: string;
+  // Sprint 15-16: New props for validation integration
+  validationMetrics?: ValidationMetrics | null;
+  onViewValidation?: () => void;
 }
 
 // Simple pie chart component
@@ -180,6 +184,8 @@ export function SpeciesBreakdown({
   showPieChart = true,
   showBarChart = true,
   className = '',
+  validationMetrics,
+  onViewValidation,
 }: SpeciesBreakdownProps) {
   const {
     speciesBreakdown: storeBreakdown,
@@ -259,10 +265,51 @@ export function SpeciesBreakdown({
     <div className={`bg-white rounded-lg border border-gray-200 overflow-hidden ${className}`}>
       {/* Header */}
       <div className="px-6 py-4 border-b border-gray-200">
-        <h3 className="text-sm font-semibold text-gray-900">Species Distribution</h3>
-        <p className="text-xs text-gray-500 mt-0.5">
-          Click on a species to filter the view
-        </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900">Species Distribution</h3>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Click on a species to filter the view
+            </p>
+          </div>
+          {/* Sprint 15-16: Accuracy indicator */}
+          {validationMetrics && (
+            <div className="flex items-center gap-2">
+              <div
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+                  validationMetrics.overallAccuracy >= 0.8
+                    ? 'bg-forest-100 text-forest-700'
+                    : validationMetrics.overallAccuracy >= 0.6
+                    ? 'bg-amber-100 text-amber-700'
+                    : 'bg-red-100 text-red-700'
+                }`}
+              >
+                <svg
+                  className="w-3.5 h-3.5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+                {(validationMetrics.overallAccuracy * 100).toFixed(0)}% Accuracy
+              </div>
+              {onViewValidation && (
+                <button
+                  onClick={onViewValidation}
+                  className="text-xs text-forest-600 hover:text-forest-700 font-medium hover:underline"
+                >
+                  View Metrics
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Stats */}

@@ -1320,3 +1320,428 @@ class SpeciesInfo(BaseModel):
     name: str = Field(..., description="Common name")
     scientific_name: str = Field(..., description="Scientific name")
     category: str = Field(..., description="Category: conifer or deciduous")
+
+
+# ============================================================================
+# ML Validation, Calibration, and Feedback Models (Sprint 15-16)
+# ============================================================================
+
+
+class ClassMetrics(BaseModel):
+    """Performance metrics for a single class/species."""
+
+    precision: float = Field(
+        ...,
+        description="Precision score (0-1)",
+        ge=0,
+        le=1,
+    )
+    recall: float = Field(
+        ...,
+        description="Recall score (0-1)",
+        ge=0,
+        le=1,
+    )
+    f1_score: float = Field(
+        ...,
+        description="F1 score (0-1)",
+        ge=0,
+        le=1,
+    )
+    support: int = Field(
+        ...,
+        description="Number of samples in this class",
+        ge=0,
+    )
+
+
+class ConfusionMatrixData(BaseModel):
+    """Detailed confusion matrix with analysis."""
+
+    matrix: list[list[int]] = Field(
+        ...,
+        description="Raw confusion matrix as 2D list",
+    )
+    normalized_matrix: list[list[float]] = Field(
+        default_factory=list,
+        description="Row-normalized confusion matrix",
+    )
+    class_labels: list[str] = Field(
+        default_factory=list,
+        description="Labels for each row/column",
+    )
+    most_confused_pairs: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Top confused class pairs with counts",
+    )
+
+
+class ValidationReport(BaseModel):
+    """Comprehensive model validation report."""
+
+    overall_accuracy: float = Field(
+        ...,
+        description="Overall classification accuracy (0-1)",
+        ge=0,
+        le=1,
+    )
+    per_class_metrics: dict[str, ClassMetrics] = Field(
+        ...,
+        description="Metrics for each species class",
+    )
+    confusion_matrix: list[list[int]] = Field(
+        ...,
+        description="Confusion matrix as 2D list",
+    )
+    class_labels: list[str] = Field(
+        ...,
+        description="List of class labels in matrix order",
+    )
+    recommendations: list[str] = Field(
+        default_factory=list,
+        description="Actionable recommendations for improvement",
+    )
+    validation_date: datetime = Field(
+        default_factory=datetime.utcnow,
+        description="When validation was performed",
+    )
+    n_samples: int = Field(
+        default=0,
+        description="Number of samples used for validation",
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional validation metadata",
+    )
+
+
+class CalibrationCurve(BaseModel):
+    """Reliability diagram data for calibration assessment."""
+
+    mean_predicted_probability: list[float] = Field(
+        ...,
+        description="Mean predicted probability for each bin",
+    )
+    fraction_of_positives: list[float] = Field(
+        ...,
+        description="Actual fraction of positives for each bin",
+    )
+    expected_calibration_error: float = Field(
+        ...,
+        description="Expected Calibration Error (ECE)",
+        ge=0,
+    )
+    n_bins: int = Field(
+        default=10,
+        description="Number of bins used",
+    )
+    bin_counts: list[int] = Field(
+        default_factory=list,
+        description="Number of samples in each bin",
+    )
+    strategy: str = Field(
+        default="uniform",
+        description="Binning strategy used",
+    )
+
+
+class UncertaintyEstimate(BaseModel):
+    """Uncertainty estimation for predictions."""
+
+    uncertainty_scores: list[float] = Field(
+        ...,
+        description="Uncertainty score for each prediction (0-1)",
+    )
+    mean_uncertainty: float = Field(
+        ...,
+        description="Mean uncertainty across all predictions",
+        ge=0,
+        le=1,
+    )
+    std_uncertainty: float = Field(
+        ...,
+        description="Standard deviation of uncertainty",
+        ge=0,
+    )
+    high_uncertainty_count: int = Field(
+        ...,
+        description="Number of high-uncertainty predictions",
+        ge=0,
+    )
+    high_uncertainty_ratio: float = Field(
+        ...,
+        description="Ratio of high-uncertainty predictions",
+        ge=0,
+        le=1,
+    )
+    uncertainty_distribution: list[int] = Field(
+        default_factory=list,
+        description="Histogram of uncertainty scores",
+    )
+    method: str = Field(
+        default="entropy",
+        description="Method used for uncertainty estimation",
+    )
+    threshold: float = Field(
+        default=0.5,
+        description="Threshold for high uncertainty",
+    )
+
+
+class CorrectionRecord(BaseModel):
+    """Record of a user correction to a species prediction."""
+
+    tree_id: str = Field(
+        ...,
+        description="Unique identifier for the tree",
+    )
+    analysis_id: str = Field(
+        ...,
+        description="ID of the analysis containing this tree",
+    )
+    predicted_species: str = Field(
+        ...,
+        description="Species code that was predicted",
+    )
+    corrected_species: str = Field(
+        ...,
+        description="Correct species code provided by user",
+    )
+    user_id: str = Field(
+        ...,
+        description="Identifier of the user making the correction",
+    )
+    timestamp: datetime = Field(
+        default_factory=datetime.utcnow,
+        description="When the correction was made",
+    )
+    confidence_was: float = Field(
+        default=0.0,
+        description="Confidence of the original prediction",
+        ge=0,
+        le=1,
+    )
+    notes: str | None = Field(
+        default=None,
+        description="Optional notes about the correction",
+    )
+
+
+class CorrectionStats(BaseModel):
+    """Statistics about accumulated corrections."""
+
+    total_corrections: int = Field(
+        ...,
+        description="Total number of corrections recorded",
+        ge=0,
+    )
+    corrections_by_predicted: dict[str, int] = Field(
+        default_factory=dict,
+        description="Count of corrections by predicted species",
+    )
+    corrections_by_corrected: dict[str, int] = Field(
+        default_factory=dict,
+        description="Count of corrections by corrected species",
+    )
+    most_confused_pairs: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Most frequently confused species pairs",
+    )
+    correction_rate_by_species: dict[str, float] = Field(
+        default_factory=dict,
+        description="Correction rate for each species",
+    )
+    corrections_by_user: dict[str, int] = Field(
+        default_factory=dict,
+        description="Count of corrections by user",
+    )
+    recent_trend: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Recent correction trend (per day)",
+    )
+    average_confidence_of_corrected: float = Field(
+        default=0.0,
+        description="Average confidence of corrected predictions",
+    )
+    unique_trees_corrected: int = Field(
+        default=0,
+        description="Number of unique trees that have been corrected",
+    )
+    unique_users: int = Field(
+        default=0,
+        description="Number of unique users who made corrections",
+    )
+
+
+class BatchProgress(BaseModel):
+    """Progress of a batch classification job."""
+
+    job_id: str = Field(
+        ...,
+        description="Unique job identifier",
+    )
+    analysis_id: str | None = Field(
+        default=None,
+        description="Associated analysis ID",
+    )
+    status: str = Field(
+        ...,
+        description="Job status: queued, processing, completed, failed, cancelled",
+    )
+    total_trees: int = Field(
+        ...,
+        description="Total number of trees to classify",
+        ge=0,
+    )
+    processed_trees: int = Field(
+        default=0,
+        description="Number of trees processed so far",
+        ge=0,
+    )
+    progress_percentage: float = Field(
+        default=0.0,
+        description="Progress as percentage (0-100)",
+        ge=0,
+        le=100,
+    )
+    elapsed_seconds: float | None = Field(
+        default=None,
+        description="Elapsed processing time in seconds",
+    )
+    eta_seconds: float | None = Field(
+        default=None,
+        description="Estimated time remaining in seconds",
+    )
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        description="When the job was created",
+    )
+    started_at: datetime | None = Field(
+        default=None,
+        description="When processing started",
+    )
+    completed_at: datetime | None = Field(
+        default=None,
+        description="When processing completed",
+    )
+    error: str | None = Field(
+        default=None,
+        description="Error message if job failed",
+    )
+
+
+class BatchResult(BaseModel):
+    """Result of a completed batch classification job."""
+
+    job_id: str = Field(
+        ...,
+        description="Unique job identifier",
+    )
+    analysis_id: str | None = Field(
+        default=None,
+        description="Associated analysis ID",
+    )
+    predictions: list[SpeciesPrediction] = Field(
+        default_factory=list,
+        description="Species predictions for all trees",
+    )
+    total_trees: int = Field(
+        ...,
+        description="Total number of trees classified",
+        ge=0,
+    )
+    species_distribution: dict[str, int] = Field(
+        default_factory=dict,
+        description="Count of trees by species",
+    )
+    average_confidence: float = Field(
+        default=0.0,
+        description="Average prediction confidence",
+        ge=0,
+        le=1,
+    )
+    processing_time_seconds: float | None = Field(
+        default=None,
+        description="Total processing time in seconds",
+    )
+    completed_at: datetime | None = Field(
+        default=None,
+        description="When processing completed",
+    )
+
+
+class ValidateModelRequest(BaseModel):
+    """Request model for running model validation."""
+
+    region: str = Field(
+        default="pnw",
+        description="Geographic region for the model",
+    )
+    test_data: list[LabeledTree] = Field(
+        ...,
+        description="Labeled test data for validation",
+        min_length=10,
+    )
+
+
+class RecordCorrectionRequest(BaseModel):
+    """Request model for recording a user correction."""
+
+    tree_id: str = Field(
+        ...,
+        description="Unique identifier for the tree",
+    )
+    predicted_species: str = Field(
+        ...,
+        description="Species code that was predicted",
+    )
+    corrected_species: str = Field(
+        ...,
+        description="Correct species code provided by user",
+    )
+    analysis_id: str | None = Field(
+        default=None,
+        description="ID of the analysis containing this tree",
+    )
+    confidence_was: float | None = Field(
+        default=None,
+        description="Confidence of the original prediction",
+        ge=0,
+        le=1,
+    )
+    notes: str | None = Field(
+        default=None,
+        description="Optional notes about the correction",
+    )
+
+
+class BatchClassifyRequest(BaseModel):
+    """Request model for batch classification."""
+
+    tree_features: list[TreeFeatures] = Field(
+        ...,
+        description="List of tree features to classify",
+        min_length=1,
+    )
+    region: str = Field(
+        default="pnw",
+        description="Geographic region for species lookup",
+    )
+    use_heuristics: bool = Field(
+        default=True,
+        description="Use domain heuristics to improve predictions",
+    )
+    batch_size: int = Field(
+        default=1000,
+        description="Number of trees to process per batch",
+        ge=1,
+        le=10000,
+    )
+    async_processing: bool = Field(
+        default=False,
+        description="Process asynchronously in background",
+    )
+    analysis_id: str | None = Field(
+        default=None,
+        description="Associated analysis ID (required for async)",
+    )
