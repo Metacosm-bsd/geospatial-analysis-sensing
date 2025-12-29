@@ -2873,6 +2873,461 @@ def _register_routes(app: FastAPI, settings: Settings) -> None:
             detail=f"Audit record not found: {audit_id}",
         )
 
+    # ========================================================================
+    # Change Detection & Time Series Endpoints (Sprint 31-36)
+    # ========================================================================
+
+    from lidar_processing.services.change_detector import (
+        ChangeDetector,
+        ChangeType,
+    )
+    from lidar_processing.services.time_series_analyzer import (
+        TimeSeriesAnalyzer,
+        ForecastModel,
+    )
+
+    # Initialize services
+    change_detector = ChangeDetector()
+    time_series_analyzer = TimeSeriesAnalyzer()
+
+    @app.post(
+        "/api/v1/change/detect",
+        tags=["Change Detection"],
+        summary="Detect changes between two epochs",
+        description="""
+        Detects changes between two LiDAR epochs, including:
+        - Tree mortality (trees present in T1 but not T2)
+        - Ingrowth (new trees in T2)
+        - Growth/decline classification
+        - Carbon stock changes
+
+        Requires tree data from two time periods with coordinates.
+        """,
+        responses={
+            200: {"description": "Change detection completed successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def detect_changes(
+        trees_t1: list[dict[str, Any]],
+        trees_t2: list[dict[str, Any]],
+        date_t1: str,
+        date_t2: str,
+        area_hectares: float,
+        project_id: str = "PROJECT001",
+        match_distance_m: float = 2.0,
+        height_tolerance_m: float = 1.0,
+    ) -> dict[str, Any]:
+        """Detect changes between two epochs."""
+        try:
+            from datetime import datetime as dt
+
+            start_time = time.time()
+
+            # Parse dates
+            try:
+                t1_date = dt.fromisoformat(date_t1.replace("Z", "+00:00"))
+                t2_date = dt.fromisoformat(date_t2.replace("Z", "+00:00"))
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid date format. Use ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)",
+                )
+
+            result = change_detector.detect_changes(
+                trees_t1=trees_t1,
+                trees_t2=trees_t2,
+                date_t1=t1_date,
+                date_t2=t2_date,
+                area_hectares=area_hectares,
+                project_id=project_id,
+                match_distance_m=match_distance_m,
+                height_tolerance_m=height_tolerance_m,
+            )
+
+            processing_time = (time.time() - start_time) * 1000
+
+            # Format tree changes
+            tree_changes = []
+            for change in result.tree_changes:
+                tree_changes.append({
+                    "tree_id": change.tree_id,
+                    "change_type": change.change_type.value,
+                    "x": change.x,
+                    "y": change.y,
+                    "height_t1_m": change.height_t1_m,
+                    "height_t2_m": change.height_t2_m,
+                    "dbh_t1_cm": change.dbh_t1_cm,
+                    "dbh_t2_cm": change.dbh_t2_cm,
+                    "height_change_m": change.height_change_m,
+                    "dbh_change_cm": change.dbh_change_cm,
+                    "carbon_t1_kg": change.carbon_t1_kg,
+                    "carbon_t2_kg": change.carbon_t2_kg,
+                    "carbon_change_kg": change.carbon_change_kg,
+                    "annual_height_growth_m": change.annual_height_growth_m,
+                    "annual_carbon_change_kg": change.annual_carbon_change_kg,
+                })
+
+            return {
+                "project_id": result.project_id,
+                "date_t1": result.date_t1.isoformat(),
+                "date_t2": result.date_t2.isoformat(),
+                "time_interval_years": result.time_interval_years,
+                "area_hectares": result.area_hectares,
+                "summary": {
+                    "total_trees_t1": result.summary.total_trees_t1,
+                    "total_trees_t2": result.summary.total_trees_t2,
+                    "matched_trees": result.summary.matched_trees,
+                    "mortality_count": result.summary.mortality_count,
+                    "ingrowth_count": result.summary.ingrowth_count,
+                    "growth_count": result.summary.growth_count,
+                    "decline_count": result.summary.decline_count,
+                    "stable_count": result.summary.stable_count,
+                    "mortality_rate_pct": result.summary.mortality_rate_pct,
+                    "ingrowth_rate_pct": result.summary.ingrowth_rate_pct,
+                    "net_tree_change": result.summary.net_tree_change,
+                    "mean_height_growth_m": result.summary.mean_height_growth_m,
+                    "mean_dbh_growth_cm": result.summary.mean_dbh_growth_cm,
+                    "total_carbon_change_kg": result.summary.total_carbon_change_kg,
+                    "annual_carbon_change_kg": result.summary.annual_carbon_change_kg,
+                    "carbon_per_hectare_change": result.summary.carbon_per_hectare_change,
+                },
+                "tree_changes": tree_changes,
+                "processing_time_ms": round(processing_time, 2),
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("Change detection failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Change detection failed: {str(e)}",
+            )
+
+    @app.post(
+        "/api/v1/change/time-series",
+        tags=["Change Detection"],
+        summary="Analyze time series across multiple epochs",
+        description="""
+        Analyzes changes across multiple LiDAR epochs to identify trends.
+
+        Calculates:
+        - Per-epoch metrics (tree count, carbon, height)
+        - Trend analysis using linear regression
+        - Annual growth rates
+        - Statistical significance
+
+        Requires at least 2 epochs of tree data.
+        """,
+        responses={
+            200: {"description": "Time series analysis completed successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def analyze_time_series(
+        epochs: list[dict[str, Any]],
+        area_hectares: float,
+        project_id: str = "PROJECT001",
+    ) -> dict[str, Any]:
+        """Analyze time series across multiple epochs."""
+        try:
+            start_time = time.time()
+
+            result = time_series_analyzer.analyze_time_series(
+                epochs=epochs,
+                area_hectares=area_hectares,
+                project_id=project_id,
+            )
+
+            processing_time = (time.time() - start_time) * 1000
+
+            # Format epochs
+            epochs_data = []
+            for epoch in result.epochs:
+                epochs_data.append({
+                    "date": epoch.date.isoformat(),
+                    "tree_count": epoch.tree_count,
+                    "total_carbon_kg": epoch.total_carbon_kg,
+                    "carbon_per_hectare_kg": epoch.carbon_per_hectare_kg,
+                    "mean_height_m": epoch.mean_height_m,
+                    "mean_dbh_cm": epoch.mean_dbh_cm,
+                    "basal_area_m2_ha": epoch.basal_area_m2_ha,
+                })
+
+            # Format trends
+            trends_data = {}
+            for metric, trend in result.trends.items():
+                trends_data[metric] = {
+                    "slope": trend.slope,
+                    "intercept": trend.intercept,
+                    "r_squared": trend.r_squared,
+                    "p_value": trend.p_value,
+                    "significant": trend.significant,
+                    "trend_direction": trend.trend_direction,
+                    "annual_change": trend.annual_change,
+                    "total_change": trend.total_change,
+                    "percent_change": trend.percent_change,
+                }
+
+            return {
+                "project_id": result.project_id,
+                "start_date": result.start_date.isoformat(),
+                "end_date": result.end_date.isoformat(),
+                "total_years": result.total_years,
+                "epoch_count": result.epoch_count,
+                "area_hectares": result.area_hectares,
+                "epochs": epochs_data,
+                "trends": trends_data,
+                "overall_summary": {
+                    "net_tree_change": result.overall_summary.get("net_tree_change", 0),
+                    "net_carbon_change_kg": result.overall_summary.get("net_carbon_change_kg", 0),
+                    "annual_carbon_rate_kg": result.overall_summary.get("annual_carbon_rate_kg", 0),
+                    "annual_height_growth_m": result.overall_summary.get("annual_height_growth_m", 0),
+                },
+                "processing_time_ms": round(processing_time, 2),
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("Time series analysis failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Time series analysis failed: {str(e)}",
+            )
+
+    @app.post(
+        "/api/v1/change/forecast",
+        tags=["Change Detection"],
+        summary="Forecast future growth",
+        description="""
+        Projects future growth based on historical time series data.
+
+        Supports multiple forecast models:
+        - linear: Simple linear extrapolation
+        - exponential: Exponential growth model
+        - moving_average: Moving average with trend
+
+        Returns forecasted values with confidence intervals.
+        """,
+        responses={
+            200: {"description": "Forecast generated successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def forecast_growth(
+        epochs: list[dict[str, Any]],
+        area_hectares: float,
+        forecast_years: int = 10,
+        model_type: str = "linear",
+        confidence_level: float = 0.95,
+        project_id: str = "PROJECT001",
+    ) -> dict[str, Any]:
+        """Forecast future growth."""
+        try:
+            start_time = time.time()
+
+            # Parse model type
+            try:
+                model = ForecastModel(model_type.lower())
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid model type: {model_type}. Use: linear, exponential, moving_average",
+                )
+
+            # First get time series analysis
+            time_series = time_series_analyzer.analyze_time_series(
+                epochs=epochs,
+                area_hectares=area_hectares,
+                project_id=project_id,
+            )
+
+            # Generate forecast
+            result = time_series_analyzer.forecast_future(
+                time_series=time_series,
+                forecast_years=forecast_years,
+                model_type=model,
+                confidence_level=confidence_level,
+            )
+
+            processing_time = (time.time() - start_time) * 1000
+
+            # Format projections
+            projections_data = []
+            for proj in result.projections:
+                projections_data.append({
+                    "year": proj.year,
+                    "date": proj.date.isoformat(),
+                    "tree_count": {
+                        "value": proj.tree_count.value,
+                        "lower_bound": proj.tree_count.lower_bound,
+                        "upper_bound": proj.tree_count.upper_bound,
+                    },
+                    "carbon_kg": {
+                        "value": proj.carbon_kg.value,
+                        "lower_bound": proj.carbon_kg.lower_bound,
+                        "upper_bound": proj.carbon_kg.upper_bound,
+                    },
+                    "carbon_per_ha_kg": {
+                        "value": proj.carbon_per_ha_kg.value,
+                        "lower_bound": proj.carbon_per_ha_kg.lower_bound,
+                        "upper_bound": proj.carbon_per_ha_kg.upper_bound,
+                    },
+                })
+
+            return {
+                "project_id": result.project_id,
+                "base_date": result.base_date.isoformat(),
+                "forecast_end_date": result.forecast_end_date.isoformat(),
+                "forecast_years": result.forecast_years,
+                "model_type": result.model_type.value,
+                "confidence_level": result.confidence_level,
+                "projections": projections_data,
+                "cumulative_carbon_gain_kg": result.cumulative_carbon_gain_kg,
+                "average_annual_growth_rate": result.average_annual_growth_rate,
+                "processing_time_ms": round(processing_time, 2),
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("Growth forecast failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Growth forecast failed: {str(e)}",
+            )
+
+    @app.post(
+        "/api/v1/change/export-geojson",
+        tags=["Change Detection"],
+        summary="Export changes to GeoJSON",
+        description="""
+        Exports change detection results to GeoJSON format for mapping.
+
+        Trees are represented as points with change attributes.
+        Can filter by change type (mortality, ingrowth, growth, etc.).
+        """,
+        responses={
+            200: {"description": "GeoJSON exported successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def export_changes_geojson(
+        trees_t1: list[dict[str, Any]],
+        trees_t2: list[dict[str, Any]],
+        date_t1: str,
+        date_t2: str,
+        area_hectares: float,
+        project_id: str = "PROJECT001",
+        change_type_filter: str | None = None,
+    ) -> dict[str, Any]:
+        """Export changes to GeoJSON."""
+        try:
+            from datetime import datetime as dt
+
+            # Parse dates
+            try:
+                t1_date = dt.fromisoformat(date_t1.replace("Z", "+00:00"))
+                t2_date = dt.fromisoformat(date_t2.replace("Z", "+00:00"))
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid date format. Use ISO format (YYYY-MM-DD)",
+                )
+
+            # Parse filter
+            filter_type = None
+            if change_type_filter:
+                try:
+                    filter_type = ChangeType(change_type_filter.lower())
+                except ValueError:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Invalid change type: {change_type_filter}. Use: mortality, ingrowth, growth, decline, stable",
+                    )
+
+            # Detect changes
+            result = change_detector.detect_changes(
+                trees_t1=trees_t1,
+                trees_t2=trees_t2,
+                date_t1=t1_date,
+                date_t2=t2_date,
+                area_hectares=area_hectares,
+                project_id=project_id,
+            )
+
+            # Export to GeoJSON
+            geojson = change_detector.export_to_geojson(
+                result=result,
+                change_type_filter=filter_type,
+            )
+
+            return geojson
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("GeoJSON export failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"GeoJSON export failed: {str(e)}",
+            )
+
+    @app.get(
+        "/api/v1/change/types",
+        tags=["Change Detection"],
+        summary="Get change types",
+        description="Returns list of possible change types for filtering.",
+        responses={
+            200: {"description": "Change types returned successfully"},
+        },
+    )
+    async def get_change_types() -> dict[str, Any]:
+        """Get supported change types."""
+        return {
+            "change_types": [
+                {
+                    "name": "mortality",
+                    "description": "Tree present in T1 but not found in T2",
+                    "color": "#dc2626",  # red
+                },
+                {
+                    "name": "ingrowth",
+                    "description": "New tree detected in T2 (not in T1)",
+                    "color": "#16a34a",  # green
+                },
+                {
+                    "name": "growth",
+                    "description": "Tree increased in height (>0.5m) between epochs",
+                    "color": "#2563eb",  # blue
+                },
+                {
+                    "name": "decline",
+                    "description": "Tree decreased in height between epochs",
+                    "color": "#d97706",  # amber
+                },
+                {
+                    "name": "stable",
+                    "description": "Tree height unchanged within tolerance",
+                    "color": "#6b7280",  # gray
+                },
+            ],
+        }
+
 
 # Create the application instance
 app = create_app()

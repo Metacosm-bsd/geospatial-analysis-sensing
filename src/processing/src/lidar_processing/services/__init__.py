@@ -92,6 +92,23 @@ from lidar_processing.services.carbon_report_generator import (
     CarbonReportConfig,
 )
 
+# Change Detection & Time Series Services (Sprint 31-36)
+from lidar_processing.services.change_detector import (
+    ChangeDetector,
+    ChangeType,
+    TreeChange,
+    ChangeDetectionResult,
+    GrowthProjection,
+)
+from lidar_processing.services.time_series_analyzer import (
+    TimeSeriesAnalyzer,
+    TimeSeriesEpoch,
+    TimeSeriesAnalysis,
+    TrendAnalysis,
+    ForecastResult,
+    ForecastModel,
+)
+
 __all__ = [
     # Core Processing Services
     "LidarValidator",
@@ -167,4 +184,16 @@ __all__ = [
     "CarbonReportGenerator",
     "CarbonReport",
     "CarbonReportConfig",
+    # Change Detection & Time Series Services (Sprint 31-36)
+    "ChangeDetector",
+    "ChangeType",
+    "TreeChange",
+    "ChangeDetectionResult",
+    "GrowthProjection",
+    "TimeSeriesAnalyzer",
+    "TimeSeriesEpoch",
+    "TimeSeriesAnalysis",
+    "TrendAnalysis",
+    "ForecastResult",
+    "ForecastModel",
 ]
