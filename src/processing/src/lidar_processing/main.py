@@ -3328,6 +3328,455 @@ def _register_routes(app: FastAPI, settings: Settings) -> None:
             ],
         }
 
+    # ========================================================================
+    # Growth Projection & Timber Value Endpoints (Sprint 37-42)
+    # ========================================================================
+
+    from lidar_processing.services.growth_projection import (
+        GrowthProjector,
+        Region as GrowthRegion,
+        GrowthModel,
+    )
+    from lidar_processing.services.timber_valuation import (
+        TimberValuator,
+        ProductClass,
+    )
+
+    @app.post(
+        "/api/v1/growth/site-index",
+        tags=["Growth Projection"],
+        summary="Estimate site index",
+        description="""
+        Estimates site index from dominant height and optionally age.
+
+        Site index is the expected height of dominant trees at a base age
+        (typically 50 or 100 years depending on region). It's used to
+        predict future growth potential.
+
+        Returns site index in feet (US forestry standard).
+        """,
+        responses={
+            200: {"description": "Site index estimated successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def estimate_site_index(
+        dominant_height_m: float,
+        age_years: float | None = None,
+        species_code: str | None = None,
+        region: str = "pnw",
+    ) -> dict[str, Any]:
+        """Estimate site index from dominant height."""
+        try:
+            # Parse region
+            try:
+                growth_region = GrowthRegion(region.lower())
+            except ValueError:
+                growth_region = GrowthRegion.PNW
+
+            projector = GrowthProjector(region=growth_region)
+            result = projector.estimate_site_index(
+                dominant_height_m=dominant_height_m,
+                age_years=age_years,
+                species_code=species_code,
+            )
+
+            return {
+                "site_index_ft": result.site_index_ft,
+                "base_age_years": result.base_age_years,
+                "height_m": result.height_m,
+                "age_years": result.age_years,
+                "confidence": result.confidence,
+                "method": result.method,
+                "species_code": result.species_code,
+                "region": region,
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
+    @app.post(
+        "/api/v1/growth/project",
+        tags=["Growth Projection"],
+        summary="Project stand growth",
+        description="""
+        Projects stand conditions into the future (5, 10, 20+ years).
+
+        Uses regional growth models to estimate future:
+        - Tree heights and diameters
+        - Stand volume and basal area
+        - Carbon sequestration
+        - Mortality
+
+        Returns current stand metrics and projections at specified years.
+        """,
+        responses={
+            200: {"description": "Growth projected successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def project_growth(
+        trees: list[dict[str, Any]],
+        area_hectares: float,
+        projection_years: list[int] = None,
+        region: str = "pnw",
+        project_id: str = "PROJECT001",
+        analysis_id: str = "ANALYSIS001",
+    ) -> dict[str, Any]:
+        """Project stand growth into the future."""
+        try:
+            if projection_years is None:
+                projection_years = [5, 10, 20]
+
+            start_time = time.time()
+
+            # Parse region
+            try:
+                growth_region = GrowthRegion(region.lower())
+            except ValueError:
+                growth_region = GrowthRegion.PNW
+
+            projector = GrowthProjector(region=growth_region)
+            result = projector.project_stand(
+                trees=trees,
+                area_hectares=area_hectares,
+                projection_years=projection_years,
+                project_id=project_id,
+                analysis_id=analysis_id,
+            )
+
+            processing_time = (time.time() - start_time) * 1000
+
+            # Format projections
+            projections_data = []
+            for proj in result.projections:
+                projections_data.append({
+                    "projection_year": proj.projection_year,
+                    "years_from_now": proj.years_from_now,
+                    "tree_count": proj.tree_count,
+                    "trees_per_hectare": proj.trees_per_hectare,
+                    "mean_height_m": proj.mean_height_m,
+                    "dominant_height_m": proj.dominant_height_m,
+                    "mean_dbh_cm": proj.mean_dbh_cm,
+                    "qmd_cm": proj.qmd_cm,
+                    "basal_area_m2_ha": proj.basal_area_m2_ha,
+                    "volume_m3_ha": proj.volume_m3_ha,
+                    "biomass_kg_ha": proj.biomass_kg_ha,
+                    "carbon_kg_ha": proj.carbon_kg_ha,
+                    "co2e_kg_ha": proj.co2e_kg_ha,
+                    "mortality_pct": proj.mortality_pct,
+                })
+
+            return {
+                "project_id": result.project_id,
+                "analysis_id": result.analysis_id,
+                "projection_date": result.projection_date.isoformat(),
+                "base_year": result.base_year,
+                "region": result.region.value,
+                "growth_model": result.growth_model.value,
+                "site_index": {
+                    "site_index_ft": result.site_index.site_index_ft,
+                    "base_age_years": result.site_index.base_age_years,
+                    "confidence": result.site_index.confidence,
+                },
+                "area_hectares": result.area_hectares,
+                "current_stand": {
+                    "tree_count": result.current_stand.tree_count,
+                    "trees_per_hectare": result.current_stand.trees_per_hectare,
+                    "mean_height_m": result.current_stand.mean_height_m,
+                    "dominant_height_m": result.current_stand.dominant_height_m,
+                    "mean_dbh_cm": result.current_stand.mean_dbh_cm,
+                    "basal_area_m2_ha": result.current_stand.basal_area_m2_ha,
+                    "volume_m3_ha": result.current_stand.volume_m3_ha,
+                    "carbon_kg_ha": result.current_stand.carbon_kg_ha,
+                },
+                "projections": projections_data,
+                "annual_growth": {
+                    "height_growth_m_yr": result.annual_growth.height_growth_m_yr,
+                    "dbh_growth_cm_yr": result.annual_growth.dbh_growth_cm_yr,
+                    "basal_area_growth_m2_ha_yr": result.annual_growth.basal_area_growth_m2_ha_yr,
+                    "volume_growth_m3_ha_yr": result.annual_growth.volume_growth_m3_ha_yr,
+                    "carbon_growth_kg_ha_yr": result.annual_growth.carbon_growth_kg_ha_yr,
+                },
+                "processing_time_ms": round(processing_time, 2),
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("Growth projection failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Growth projection failed: {str(e)}",
+            )
+
+    @app.post(
+        "/api/v1/timber/appraise",
+        tags=["Timber Valuation"],
+        summary="Appraise timber value",
+        description="""
+        Appraises timber value for a stand based on regional prices.
+
+        Assigns product classes (sawlog, pulpwood, etc.) to each tree
+        and calculates stumpage value using current market prices.
+
+        Returns product breakdown, total value, and harvest scenarios.
+        """,
+        responses={
+            200: {"description": "Timber appraised successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def appraise_timber(
+        trees: list[dict[str, Any]],
+        area_hectares: float,
+        region: str = "pnw",
+        project_id: str = "PROJECT001",
+        analysis_id: str = "ANALYSIS001",
+    ) -> dict[str, Any]:
+        """Appraise timber value."""
+        try:
+            start_time = time.time()
+
+            valuator = TimberValuator(region=region.lower())
+            result = valuator.appraise_stand(
+                trees=trees,
+                area_hectares=area_hectares,
+                project_id=project_id,
+                analysis_id=analysis_id,
+            )
+
+            processing_time = (time.time() - start_time) * 1000
+
+            # Format products
+            products_data = []
+            for prod in result.products:
+                products_data.append({
+                    "product_class": prod.product_class.value,
+                    "tree_count": prod.tree_count,
+                    "total_volume_m3": prod.total_volume_m3,
+                    "total_board_feet": prod.total_board_feet,
+                    "average_price": prod.average_price,
+                    "total_value": prod.total_value,
+                    "percent_of_volume": prod.percent_of_volume,
+                })
+
+            # Format scenarios
+            scenarios_data = []
+            for scenario in result.harvest_scenarios:
+                scenarios_data.append({
+                    "scenario_id": scenario.scenario_id,
+                    "name": scenario.name,
+                    "description": scenario.description,
+                    "min_dbh_cm": scenario.min_dbh_cm,
+                    "target_ba_m2_ha": scenario.target_ba_m2_ha,
+                    "estimated_trees": scenario.estimated_trees,
+                    "estimated_volume_m3": round(scenario.estimated_volume_m3, 2),
+                    "estimated_value": round(scenario.estimated_value, 2),
+                    "residual_trees": scenario.residual_trees,
+                    "residual_ba_m2_ha": scenario.residual_ba_m2_ha,
+                })
+
+            return {
+                "project_id": result.project_id,
+                "analysis_id": result.analysis_id,
+                "appraisal_date": result.appraisal_date.isoformat(),
+                "region": result.region,
+                "area_hectares": result.area_hectares,
+                "tree_count": result.tree_count,
+                "merchantable_trees": result.merchantable_trees,
+                "total_gross_volume_m3": result.total_gross_volume_m3,
+                "total_net_volume_m3": result.total_net_volume_m3,
+                "total_board_feet": result.total_board_feet,
+                "products": products_data,
+                "total_stumpage_value": result.total_stumpage_value,
+                "value_per_hectare": result.value_per_hectare,
+                "value_per_mbf_average": result.value_per_mbf_average,
+                "harvest_scenarios": scenarios_data,
+                "price_sources": result.price_sources,
+                "processing_time_ms": round(processing_time, 2),
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("Timber appraisal failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Timber appraisal failed: {str(e)}",
+            )
+
+    @app.post(
+        "/api/v1/timber/tree-value",
+        tags=["Timber Valuation"],
+        summary="Calculate single tree value",
+        description="""
+        Calculates the stumpage value for a single tree.
+
+        Assigns the highest value product class the tree qualifies for
+        and calculates value based on regional prices.
+        """,
+        responses={
+            200: {"description": "Tree value calculated successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def calculate_tree_value(
+        tree_id: str,
+        dbh_cm: float,
+        height_m: float,
+        species_code: str | None = None,
+        defect_pct: float = 15,
+        region: str = "pnw",
+    ) -> dict[str, Any]:
+        """Calculate single tree value."""
+        try:
+            valuator = TimberValuator(region=region.lower())
+            result = valuator.calculate_tree_value(
+                tree_id=tree_id,
+                dbh_cm=dbh_cm,
+                height_m=height_m,
+                species_code=species_code,
+                defect_pct=defect_pct,
+            )
+
+            return {
+                "tree_id": result.tree_id,
+                "species_code": result.species_code,
+                "dbh_cm": result.dbh_cm,
+                "height_m": result.height_m,
+                "product_class": result.product_class.value,
+                "merchantable_height_m": result.merchantable_height_m,
+                "gross_volume_m3": result.gross_volume_m3,
+                "net_volume_m3": result.net_volume_m3,
+                "board_feet": result.board_feet,
+                "price_per_unit": result.price_per_unit,
+                "stumpage_value": result.stumpage_value,
+                "region": region,
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
+    @app.get(
+        "/api/v1/timber/prices",
+        tags=["Timber Valuation"],
+        summary="Get regional timber prices",
+        description="Returns current timber prices by product class for a region.",
+        responses={
+            200: {"description": "Prices returned successfully"},
+        },
+    )
+    async def get_timber_prices(region: str = "pnw") -> dict[str, Any]:
+        """Get regional timber prices."""
+        valuator = TimberValuator(region=region.lower())
+
+        prices_data = []
+        for price in valuator.prices:
+            prices_data.append({
+                "product": price.product.value,
+                "species_code": price.species_code,
+                "price_per_mbf": price.price_per_mbf,
+                "price_per_m3": price.price_per_m3,
+                "effective_date": price.effective_date.isoformat(),
+                "source": price.source,
+            })
+
+        return {
+            "region": region,
+            "prices": prices_data,
+            "updated": datetime.now().isoformat(),
+        }
+
+    @app.get(
+        "/api/v1/timber/product-classes",
+        tags=["Timber Valuation"],
+        summary="Get product class specifications",
+        description="Returns specifications for each timber product class.",
+        responses={
+            200: {"description": "Product classes returned successfully"},
+        },
+    )
+    async def get_product_classes() -> dict[str, Any]:
+        """Get product class specifications."""
+        from lidar_processing.services.timber_valuation import PRODUCT_SPECS
+
+        products_data = []
+        for product, specs in PRODUCT_SPECS.items():
+            products_data.append({
+                "product_class": product.value,
+                "name": specs.name,
+                "min_dbh_cm": specs.min_dbh_cm,
+                "min_length_m": specs.min_length_m,
+                "max_defect_pct": specs.max_defect_pct,
+                "form_factor": specs.form_factor,
+            })
+
+        return {"product_classes": products_data}
+
+    @app.get(
+        "/api/v1/growth/regions",
+        tags=["Growth Projection"],
+        summary="Get supported growth regions",
+        description="Returns list of regions with growth models available.",
+        responses={
+            200: {"description": "Regions returned successfully"},
+        },
+    )
+    async def get_growth_regions() -> dict[str, Any]:
+        """Get supported growth regions."""
+        return {
+            "regions": [
+                {
+                    "code": "pnw",
+                    "name": "Pacific Northwest",
+                    "description": "Oregon, Washington, British Columbia",
+                    "base_age_years": 50,
+                    "primary_species": ["PSME", "TSHE", "THPL", "PISI"],
+                },
+                {
+                    "code": "southeast",
+                    "name": "Southeastern US",
+                    "description": "Georgia, Alabama, Florida, Carolinas",
+                    "base_age_years": 25,
+                    "primary_species": ["PITA", "PIEL", "PIPA"],
+                },
+                {
+                    "code": "northeast",
+                    "name": "Northeastern US",
+                    "description": "New York, New England, Pennsylvania",
+                    "base_age_years": 50,
+                    "primary_species": ["PIST", "ACRU", "QURU"],
+                },
+                {
+                    "code": "rockies",
+                    "name": "Rocky Mountains",
+                    "description": "Montana, Idaho, Colorado, Wyoming",
+                    "base_age_years": 100,
+                    "primary_species": ["PIPO", "PICO", "ABLA"],
+                },
+                {
+                    "code": "california",
+                    "name": "California",
+                    "description": "California forests including coast and Sierra",
+                    "base_age_years": 100,
+                    "primary_species": ["PIPO", "SEGI", "SESE", "ABCO"],
+                },
+            ],
+        }
+
 
 # Create the application instance
 app = create_app()

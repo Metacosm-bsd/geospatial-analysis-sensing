@@ -109,6 +109,30 @@ from lidar_processing.services.time_series_analyzer import (
     ForecastModel,
 )
 
+# Growth Projection & Timber Value Services (Sprint 37-42)
+from lidar_processing.services.growth_projection import (
+    GrowthProjector,
+    SiteIndexEstimate,
+    GrowthRate,
+    StandProjection,
+    TreeProjection,
+    GrowthProjectionResult,
+    Region,
+    GrowthModel,
+    project_growth,
+)
+from lidar_processing.services.timber_valuation import (
+    TimberValuator,
+    ProductClass,
+    ProductSpecs,
+    TreeProduct,
+    ProductSummary,
+    HarvestScenario,
+    TimberAppraisal,
+    TimberPrice,
+    appraise_timber,
+)
+
 __all__ = [
     # Core Processing Services
     "LidarValidator",
@@ -196,4 +220,23 @@ __all__ = [
     "TrendAnalysis",
     "ForecastResult",
     "ForecastModel",
+    # Growth Projection & Timber Value Services (Sprint 37-42)
+    "GrowthProjector",
+    "SiteIndexEstimate",
+    "GrowthRate",
+    "StandProjection",
+    "TreeProjection",
+    "GrowthProjectionResult",
+    "Region",
+    "GrowthModel",
+    "project_growth",
+    "TimberValuator",
+    "ProductClass",
+    "ProductSpecs",
+    "TreeProduct",
+    "ProductSummary",
+    "HarvestScenario",
+    "TimberAppraisal",
+    "TimberPrice",
+    "appraise_timber",
 ]
