@@ -8,6 +8,7 @@ Solutions to common issues when installing and running the LiDAR Forest Analysis
 - [Database Issues](#database-issues)
 - [Processing Service Issues](#processing-service-issues)
 - [Backend API Issues](#backend-api-issues)
+- [Public API Issues](#public-api-issues)
 - [Frontend Issues](#frontend-issues)
 - [Network & Connectivity Issues](#network--connectivity-issues)
 - [Performance Issues](#performance-issues)
@@ -372,6 +373,144 @@ docker compose up -d backend
    # Create if missing
    docker exec lidar-minio mc mb local/lidar-uploads
    ```
+
+---
+
+## Public API Issues
+
+### API Key Authentication Errors
+
+**Symptom:** "Missing API key" or "Invalid API key" errors
+
+**Diagnosis:**
+```bash
+# Test API key
+curl -v -H "Authorization: Bearer lf_live_your_key" \
+  http://localhost:4000/api/v1/projects
+```
+
+**Solutions:**
+
+1. **Wrong header format:**
+   ```bash
+   # Correct formats:
+   -H "Authorization: Bearer lf_live_xxx"
+   -H "X-API-Key: lf_live_xxx"
+
+   # NOT:
+   -H "Authorization: lf_live_xxx"  # Missing "Bearer"
+   ```
+
+2. **API key not created:**
+   - Log in to the frontend
+   - Go to Settings > Developer > API Keys
+   - Create a new API key
+
+3. **API key revoked or expired:**
+   - Check the API Keys dashboard for key status
+   - Create a new key if the old one is revoked
+
+### Rate Limit Exceeded
+
+**Symptom:** HTTP 429 "Rate limit exceeded"
+
+**Diagnosis:**
+```bash
+# Check rate limit headers in response
+curl -I -H "Authorization: Bearer $API_KEY" \
+  http://localhost:4000/api/v1/projects
+
+# Look for:
+# X-RateLimit-Limit: 60
+# X-RateLimit-Remaining: 0
+# X-RateLimit-Reset: 2024-01-01T00:00:00Z
+```
+
+**Solutions:**
+
+1. **Wait for reset:**
+   The `X-RateLimit-Reset` header shows when limits reset.
+
+2. **Upgrade tier:**
+   Contact sales@lidarforest.com for higher rate limits.
+
+3. **Reduce request frequency:**
+   Implement backoff in your client code.
+
+### Insufficient Permissions
+
+**Symptom:** HTTP 403 "Insufficient permissions"
+
+**Solution:**
+```bash
+# Check key scopes
+curl -H "Authorization: Bearer $API_KEY" \
+  http://localhost:4000/api/api-keys
+
+# Required scopes by endpoint:
+# /projects: read:projects, write:projects, delete:projects
+# /files: read:files, write:files, delete:files
+# /analyses: read:analyses, write:analyses, delete:analyses
+# /reports: read:reports, write:reports
+```
+
+Create a new API key with the required scopes.
+
+### Webhook Delivery Failures
+
+**Symptom:** Webhooks not being received
+
+**Diagnosis:**
+```bash
+# Check webhook status
+curl -H "Authorization: Bearer $JWT_TOKEN" \
+  http://localhost:4000/api/webhooks/WEBHOOK_ID/deliveries
+```
+
+**Solutions:**
+
+1. **Endpoint not accessible:**
+   - Ensure your webhook URL is publicly accessible
+   - Check firewall rules
+
+2. **HTTPS required:**
+   - Webhook endpoints should use HTTPS in production
+
+3. **Timeout:**
+   - Your endpoint must respond within 30 seconds
+   - Return 2xx status code quickly, process async
+
+4. **Test webhook:**
+   ```bash
+   curl -X POST -H "Authorization: Bearer $JWT_TOKEN" \
+     http://localhost:4000/api/webhooks/WEBHOOK_ID/test
+   ```
+
+5. **Retry failed delivery:**
+   ```bash
+   curl -X POST -H "Authorization: Bearer $JWT_TOKEN" \
+     http://localhost:4000/api/webhooks/WEBHOOK_ID/deliveries/DELIVERY_ID/retry
+   ```
+
+### SDK Connection Issues
+
+**JavaScript SDK:**
+```typescript
+const client = new LidarForest({
+  apiKey: 'lf_live_xxx',
+  baseUrl: 'http://localhost:4000/api/v1',  // Include full path
+  timeout: 30000,
+});
+```
+
+**Python SDK:**
+```python
+client = LidarForest(
+    api_key='lf_live_xxx',
+    base_url='http://localhost:4000/api/v1',
+    timeout=30.0,
+)
+```
 
 ---
 

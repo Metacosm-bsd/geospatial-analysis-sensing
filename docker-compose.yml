@@ -252,6 +252,51 @@ services:
     profiles:
       - dev
 
+  # =============================================================================
+  # Swagger UI - API Documentation (Development Only)
+  # =============================================================================
+  swagger-ui:
+    image: swaggerapi/swagger-ui:latest
+    container_name: lidar-swagger
+    restart: unless-stopped
+    ports:
+      - "${SWAGGER_PORT:-8082}:8080"
+    environment:
+      SWAGGER_JSON: /openapi/openapi.yaml
+      BASE_URL: /docs
+    volumes:
+      - ./src/backend/openapi.yaml:/openapi/openapi.yaml:ro
+    networks:
+      - lidar-network
+    profiles:
+      - dev
+
+  # =============================================================================
+  # Webhook Worker - Background Webhook Delivery (Full Profile)
+  # =============================================================================
+  webhook-worker:
+    build:
+      context: ./src/backend
+      dockerfile: Dockerfile
+      target: ${BACKEND_TARGET:-production}
+    container_name: lidar-webhook-worker
+    restart: unless-stopped
+    command: ["node", "dist/workers/webhook.js"]
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-lidar}:${POSTGRES_PASSWORD:-lidar_dev_password}@postgres:5432/${POSTGRES_DB:-lidar_forest}
+      REDIS_URL: redis://redis:6379
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - lidar-network
+    profiles:
+      - full
+
 # =============================================================================
 # Volumes
 # =============================================================================

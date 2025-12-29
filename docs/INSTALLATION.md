@@ -39,12 +39,15 @@ Ensure these ports are available:
 | Port | Service | Description |
 |------|---------|-------------|
 | 3000 | Frontend | React application |
-| 4000 | Backend | Node.js API |
+| 4000 | Backend | Node.js API + Public REST API |
 | 8000 | Processing | Python processing API |
 | 5432 | PostgreSQL | Database |
 | 6379 | Redis | Cache & queue |
 | 9000 | MinIO API | Object storage |
 | 9001 | MinIO Console | Storage admin UI |
+| 8080 | Adminer | Database admin (dev only) |
+| 8081 | Redis Commander | Redis admin (dev only) |
+| 8082 | Swagger UI | API documentation (dev only) |
 
 ---
 
@@ -131,9 +134,27 @@ curl http://localhost:8000/health
 |---------|-----|-------------|
 | Frontend | http://localhost:3000 | Create account |
 | Backend API | http://localhost:4000 | N/A |
+| Public API (v1) | http://localhost:4000/api/v1 | API Key |
 | Processing API | http://localhost:8000 | N/A |
-| API Documentation | http://localhost:8000/docs | N/A |
+| API Documentation | http://localhost:8082 | N/A (dev profile) |
 | MinIO Console | http://localhost:9001 | minioadmin/minioadmin |
+| Adminer | http://localhost:8080 | lidar/lidar_dev_password (dev profile) |
+| Redis Commander | http://localhost:8081 | N/A (dev profile) |
+
+### Step 8: Create an API Key
+
+To use the Public REST API, create an API key:
+
+1. Log in to the frontend at http://localhost:3000
+2. Navigate to Settings > Developer > API Keys
+3. Click "Create API Key" and select permissions
+4. Copy and save your API key (it won't be shown again)
+
+Test your API key:
+```bash
+curl -H "Authorization: Bearer lf_live_your_key" \
+  http://localhost:4000/api/v1/projects
+```
 
 ---
 
@@ -263,6 +284,22 @@ npm run dev
 | `JWT_SECRET` | (required) | JWT signing secret (min 32 chars) |
 | `JWT_EXPIRES_IN` | 7d | Token expiration time |
 
+#### Public API
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `API_RATE_LIMIT_FREE` | 60 | Free tier requests/minute |
+| `API_RATE_LIMIT_STARTER` | 120 | Starter tier requests/minute |
+| `API_RATE_LIMIT_PRO` | 300 | Professional tier requests/minute |
+| `API_RATE_LIMIT_ENTERPRISE` | 1000 | Enterprise tier requests/minute |
+
+#### Webhooks
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WEBHOOK_TIMEOUT_MS` | 30000 | Webhook delivery timeout |
+| `WEBHOOK_RETRY_COUNT` | 5 | Maximum retry attempts |
+
 #### Processing
 
 | Variable | Default | Description |
@@ -284,8 +321,8 @@ npm run dev
 | Profile | Services | Use Case |
 |---------|----------|----------|
 | (default) | postgres, redis, minio | Infrastructure only |
-| `full` | All services | Full application |
-| `dev` | + adminer, redis-commander | Development tools |
+| `full` | + processing, backend, frontend, webhook-worker | Full application |
+| `dev` | + adminer, redis-commander, swagger-ui | Development tools |
 
 Usage:
 ```bash
@@ -295,8 +332,11 @@ docker compose up -d
 # Full application
 docker compose --profile full up -d
 
-# With development tools
+# With development tools (includes API docs)
 docker compose --profile full --profile dev up -d
+
+# View API documentation
+open http://localhost:8082  # Swagger UI
 ```
 
 ---
@@ -441,5 +481,15 @@ docker compose --profile full up -d
 
 1. **Create an account** at http://localhost:3000
 2. **Upload sample data** from the `data/` directory
-3. **Explore the API** at http://localhost:8000/docs
-4. **Read the User Guide** in `docs/USER_GUIDE.md`
+3. **Create an API key** in Settings > Developer > API Keys
+4. **Explore the Public API** at http://localhost:8082 (Swagger UI, dev profile)
+5. **Install an SDK** for programmatic access:
+   ```bash
+   # JavaScript/TypeScript
+   npm install @lidarforest/sdk
+
+   # Python
+   pip install lidarforest
+   ```
+6. **Set up webhooks** for real-time event notifications
+7. **Read the SDK documentation** in `sdks/javascript/README.md` or `sdks/python/README.md`
