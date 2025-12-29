@@ -74,6 +74,24 @@ from lidar_processing.services.spatial_exporter import (
     ExportResult,
 )
 
+# Carbon Stock Estimation Services (Sprint 25-30)
+from lidar_processing.services.carbon_stock_estimator import (
+    CarbonStockEstimator,
+    CarbonProtocol,
+    PoolType,
+    UncertaintyMethod,
+    UncertaintyEstimate,
+    CarbonPool,
+    TreeCarbonEstimate,
+    ProjectCarbonStock,
+    AuditRecord,
+)
+from lidar_processing.services.carbon_report_generator import (
+    CarbonReportGenerator,
+    CarbonReport,
+    CarbonReportConfig,
+)
+
 __all__ = [
     # Core Processing Services
     "LidarValidator",
@@ -136,4 +154,17 @@ __all__ = [
     "SpatialExporter",
     "ExportFormat",
     "ExportResult",
+    # Carbon Stock Estimation Services (Sprint 25-30)
+    "CarbonStockEstimator",
+    "CarbonProtocol",
+    "PoolType",
+    "UncertaintyMethod",
+    "UncertaintyEstimate",
+    "CarbonPool",
+    "TreeCarbonEstimate",
+    "ProjectCarbonStock",
+    "AuditRecord",
+    "CarbonReportGenerator",
+    "CarbonReport",
+    "CarbonReportConfig",
 ]

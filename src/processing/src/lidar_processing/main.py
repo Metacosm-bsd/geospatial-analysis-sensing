@@ -79,6 +79,15 @@ from lidar_processing.services.stand_delineator import (
 )
 from lidar_processing.services.fia_report_generator import FIAReportGenerator
 from lidar_processing.services.spatial_exporter import SpatialExporter, ExportFormat
+from lidar_processing.services.carbon_stock_estimator import (
+    CarbonStockEstimator,
+    CarbonProtocol,
+    UncertaintyMethod,
+)
+from lidar_processing.services.carbon_report_generator import (
+    CarbonReportGenerator,
+    CarbonReportConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2455,6 +2464,414 @@ def _register_routes(app: FastAPI, settings: Settings) -> None:
                 },
             ],
         }
+
+    # ========================================================================
+    # Carbon Stock Estimation Endpoints (Sprint 25-30)
+    # ========================================================================
+
+    # Initialize carbon estimators for each protocol
+    carbon_estimators = {
+        CarbonProtocol.VCS: CarbonStockEstimator(CarbonProtocol.VCS),
+        CarbonProtocol.CAR: CarbonStockEstimator(CarbonProtocol.CAR),
+        CarbonProtocol.ACR: CarbonStockEstimator(CarbonProtocol.ACR),
+        CarbonProtocol.FIA: CarbonStockEstimator(CarbonProtocol.FIA),
+    }
+    carbon_report_generator = CarbonReportGenerator()
+
+    @app.post(
+        "/api/v1/carbon/estimate-tree",
+        tags=["Carbon Stock"],
+        summary="Estimate carbon for a single tree",
+        description="""
+        Estimates carbon stock for a single tree using protocol-specific
+        methodologies (VCS, CAR, ACR, FIA).
+
+        Returns biomass, carbon, and CO2 equivalent with uncertainty estimates.
+        """,
+        responses={
+            200: {"description": "Tree carbon estimated successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def estimate_tree_carbon(
+        tree_id: str,
+        dbh_cm: float,
+        height_m: float,
+        species_code: str | None = None,
+        aboveground_biomass_kg: float | None = None,
+        protocol: str = "vcs",
+    ) -> dict[str, Any]:
+        """Estimate carbon for a single tree."""
+        try:
+            # Parse protocol
+            try:
+                carbon_protocol = CarbonProtocol(protocol.lower())
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid protocol: {protocol}. Use: vcs, car, acr, fia",
+                )
+
+            estimator = carbon_estimators[carbon_protocol]
+            estimate = estimator.estimate_tree_carbon(
+                tree_id=tree_id,
+                dbh_cm=dbh_cm,
+                height_m=height_m,
+                species_code=species_code,
+                aboveground_biomass_kg=aboveground_biomass_kg,
+            )
+
+            return {
+                "tree_id": estimate.tree_id,
+                "species_code": estimate.species_code,
+                "dbh_cm": estimate.dbh_cm,
+                "height_m": estimate.height_m,
+                "protocol": estimate.protocol.value,
+                "equation_source": estimate.equation_source,
+                "aboveground_biomass_kg": {
+                    "value": estimate.aboveground_biomass_kg.value,
+                    "uncertainty_pct": estimate.aboveground_biomass_kg.uncertainty_pct,
+                    "lower_bound": estimate.aboveground_biomass_kg.lower_bound,
+                    "upper_bound": estimate.aboveground_biomass_kg.upper_bound,
+                },
+                "belowground_biomass_kg": {
+                    "value": estimate.belowground_biomass_kg.value,
+                    "uncertainty_pct": estimate.belowground_biomass_kg.uncertainty_pct,
+                    "lower_bound": estimate.belowground_biomass_kg.lower_bound,
+                    "upper_bound": estimate.belowground_biomass_kg.upper_bound,
+                },
+                "total_biomass_kg": {
+                    "value": estimate.total_biomass_kg.value,
+                    "uncertainty_pct": estimate.total_biomass_kg.uncertainty_pct,
+                    "lower_bound": estimate.total_biomass_kg.lower_bound,
+                    "upper_bound": estimate.total_biomass_kg.upper_bound,
+                },
+                "carbon_kg": {
+                    "value": estimate.carbon_kg.value,
+                    "uncertainty_pct": estimate.carbon_kg.uncertainty_pct,
+                    "lower_bound": estimate.carbon_kg.lower_bound,
+                    "upper_bound": estimate.carbon_kg.upper_bound,
+                },
+                "co2e_kg": {
+                    "value": estimate.co2e_kg.value,
+                    "uncertainty_pct": estimate.co2e_kg.uncertainty_pct,
+                    "lower_bound": estimate.co2e_kg.lower_bound,
+                    "upper_bound": estimate.co2e_kg.upper_bound,
+                },
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
+    @app.post(
+        "/api/v1/carbon/estimate-project",
+        tags=["Carbon Stock"],
+        summary="Estimate carbon stock for a project",
+        description="""
+        Estimates total carbon stock for a project from tree data.
+
+        Calculates carbon by pool (above-ground, below-ground) with
+        protocol-specific methodologies and uncertainty propagation.
+
+        Returns total carbon, CO2 equivalent, and breakdown by pool.
+        """,
+        responses={
+            200: {"description": "Project carbon estimated successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def estimate_project_carbon(
+        trees: list[dict[str, Any]],
+        area_hectares: float,
+        project_id: str = "PROJECT001",
+        analysis_id: str = "ANALYSIS001",
+        protocol: str = "vcs",
+    ) -> dict[str, Any]:
+        """Estimate carbon stock for a project."""
+        try:
+            start_time = time.time()
+
+            # Parse protocol
+            try:
+                carbon_protocol = CarbonProtocol(protocol.lower())
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid protocol: {protocol}. Use: vcs, car, acr, fia",
+                )
+
+            estimator = carbon_estimators[carbon_protocol]
+            result = estimator.estimate_project_carbon(
+                trees=trees,
+                area_hectares=area_hectares,
+                project_id=project_id,
+                analysis_id=analysis_id,
+            )
+
+            processing_time = (time.time() - start_time) * 1000
+
+            # Convert pools to dict
+            pools_data = {}
+            for pool_type, pool in result.pools.items():
+                pools_data[pool_type.value] = {
+                    "carbon_tonnes": pool.carbon_tonnes.value,
+                    "co2e_tonnes": pool.co2e_tonnes.value,
+                    "uncertainty_pct": pool.carbon_tonnes.uncertainty_pct,
+                    "carbon_density_t_ha": pool.carbon_density_t_ha,
+                }
+
+            return {
+                "project_id": result.project_id,
+                "analysis_id": result.analysis_id,
+                "protocol": result.protocol.value,
+                "methodology_version": result.methodology_version,
+                "audit_id": result.audit_id,
+                "total_carbon_tonnes": {
+                    "value": result.total_carbon_tonnes.value,
+                    "uncertainty_pct": result.total_carbon_tonnes.uncertainty_pct,
+                    "lower_bound": result.total_carbon_tonnes.lower_bound,
+                    "upper_bound": result.total_carbon_tonnes.upper_bound,
+                },
+                "total_co2e_tonnes": {
+                    "value": result.total_co2e_tonnes.value,
+                    "uncertainty_pct": result.total_co2e_tonnes.uncertainty_pct,
+                    "lower_bound": result.total_co2e_tonnes.lower_bound,
+                    "upper_bound": result.total_co2e_tonnes.upper_bound,
+                },
+                "pools": pools_data,
+                "area_hectares": result.area_hectares,
+                "tree_count": result.tree_count,
+                "calculation_date": result.calculation_date.isoformat(),
+                "processing_time_ms": round(processing_time, 2),
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("Project carbon estimation failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Carbon estimation failed: {str(e)}",
+            )
+
+    @app.post(
+        "/api/v1/carbon/credits",
+        tags=["Carbon Stock"],
+        summary="Calculate carbon credits",
+        description="""
+        Calculates potential carbon credits from CO2 equivalent tonnes.
+
+        Applies protocol-specific conservative deductions and provides
+        estimated value ranges based on current market prices.
+        """,
+        responses={
+            200: {"description": "Credits calculated successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def calculate_carbon_credits(
+        co2e_tonnes: float,
+        registry: str = "vcs",
+    ) -> dict[str, Any]:
+        """Calculate carbon credits from CO2e."""
+        try:
+            # Parse registry
+            try:
+                carbon_protocol = CarbonProtocol(registry.lower())
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid registry: {registry}. Use: vcs, car, acr, fia",
+                )
+
+            estimator = carbon_estimators[carbon_protocol]
+            return estimator.calculate_carbon_credits(co2e_tonnes, carbon_protocol)
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
+    @app.post(
+        "/api/v1/carbon/report",
+        tags=["Carbon Stock"],
+        summary="Generate carbon stock report",
+        description="""
+        Generates a comprehensive carbon stock report in PDF and/or Excel format.
+
+        Report includes:
+        - Executive summary with totals and uncertainty
+        - Carbon pools breakdown
+        - Carbon credits potential
+        - Methodology documentation
+        - Audit trail
+        """,
+        responses={
+            200: {"description": "Report generated successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def generate_carbon_report(
+        trees: list[dict[str, Any]],
+        area_hectares: float,
+        project_id: str = "PROJECT001",
+        analysis_id: str = "ANALYSIS001",
+        protocol: str = "vcs",
+        output_format: str = "both",
+        include_credits: bool = True,
+    ) -> dict[str, Any]:
+        """Generate carbon stock report."""
+        try:
+            start_time = time.time()
+
+            # Parse protocol
+            try:
+                carbon_protocol = CarbonProtocol(protocol.lower())
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid protocol: {protocol}. Use: vcs, car, acr, fia",
+                )
+
+            # Estimate carbon
+            estimator = carbon_estimators[carbon_protocol]
+            carbon_stock = estimator.estimate_project_carbon(
+                trees=trees,
+                area_hectares=area_hectares,
+                project_id=project_id,
+                analysis_id=analysis_id,
+            )
+
+            # Calculate credits if requested
+            credits = None
+            if include_credits:
+                credits = estimator.calculate_carbon_credits(
+                    carbon_stock.total_co2e_tonnes.value,
+                    carbon_protocol,
+                )
+
+            # Generate report
+            config = CarbonReportConfig(include_credits=include_credits)
+            report = carbon_report_generator.generate_report(
+                carbon_stock=carbon_stock,
+                credits=credits,
+                config=config,
+                output_format=output_format,
+            )
+
+            processing_time = (time.time() - start_time) * 1000
+
+            return {
+                **carbon_report_generator.generate_summary_dict(report),
+                "processing_time_ms": round(processing_time, 2),
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("Carbon report generation failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Report generation failed: {str(e)}",
+            )
+
+    @app.get(
+        "/api/v1/carbon/protocols",
+        tags=["Carbon Stock"],
+        summary="Get supported carbon protocols",
+        description="Returns list of supported carbon accounting protocols.",
+        responses={
+            200: {"description": "Protocols returned successfully"},
+        },
+    )
+    async def get_carbon_protocols() -> dict[str, Any]:
+        """Get supported carbon protocols."""
+        return {
+            "protocols": [
+                {
+                    "name": "vcs",
+                    "full_name": "Verified Carbon Standard (Verra)",
+                    "description": "International standard for voluntary carbon markets",
+                    "carbon_fraction": 0.47,
+                    "conservative_deduction": "15%",
+                    "methodology": "VM0010",
+                },
+                {
+                    "name": "car",
+                    "full_name": "Climate Action Reserve",
+                    "description": "North American carbon offset program",
+                    "carbon_fraction": 0.50,
+                    "conservative_deduction": "20%",
+                    "methodology": "CAR Forest Protocol",
+                },
+                {
+                    "name": "acr",
+                    "full_name": "American Carbon Registry",
+                    "description": "US-based voluntary carbon registry",
+                    "carbon_fraction": 0.47,
+                    "conservative_deduction": "18%",
+                    "methodology": "ACR Methodology",
+                },
+                {
+                    "name": "fia",
+                    "full_name": "Forest Inventory and Analysis",
+                    "description": "USFS standard (no deduction, reference only)",
+                    "carbon_fraction": 0.47,
+                    "conservative_deduction": "0%",
+                    "methodology": "FIA/Jenkins 2003",
+                },
+            ],
+        }
+
+    @app.get(
+        "/api/v1/carbon/audit/{audit_id}",
+        tags=["Carbon Stock"],
+        summary="Get audit trail for carbon calculation",
+        description="""
+        Retrieves the audit trail for a specific carbon calculation.
+
+        Audit trail includes all inputs, outputs, methodology used,
+        and uncertainty information for verification purposes.
+        """,
+        responses={
+            200: {"description": "Audit trail returned successfully"},
+            404: {"description": "Audit record not found"},
+        },
+    )
+    async def get_carbon_audit(audit_id: str) -> dict[str, Any]:
+        """Get audit trail for a carbon calculation."""
+        # Search all estimators for the audit record
+        for protocol, estimator in carbon_estimators.items():
+            for record in estimator.get_audit_records():
+                if record.audit_id == audit_id:
+                    return {
+                        "audit_id": record.audit_id,
+                        "calculation_type": record.calculation_type,
+                        "timestamp": record.timestamp.isoformat(),
+                        "protocol": record.protocol.value,
+                        "methodology_version": record.methodology_version,
+                        "uncertainty_method": record.uncertainty_method.value,
+                        "uncertainty_pct": record.uncertainty_pct,
+                        "equation_sources": record.equation_sources,
+                        "input_data": record.input_data,
+                        "output_data": record.output_data,
+                        "system_version": record.system_version,
+                    }
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Audit record not found: {audit_id}",
+        )
 
 
 # Create the application instance
