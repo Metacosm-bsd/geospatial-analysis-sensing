@@ -5,6 +5,7 @@ import analysesRouter from './analyses.js';
 import filesRouter from './files.js';
 import viewerRouter from './viewer.js';
 import reportsRouter from './reports.js';
+import speciesRouter from './species.js';
 
 const router = Router();
 
@@ -15,6 +16,7 @@ router.use('/analyses', analysesRouter);
 router.use('/files', filesRouter);
 router.use('/viewer', viewerRouter);
 router.use('/reports', reportsRouter);
+router.use('/species', speciesRouter);
 
 // API info endpoint
 router.get('/', (_req, res) => {
@@ -28,6 +30,7 @@ router.get('/', (_req, res) => {
       files: '/api/v1/files',
       viewer: '/api/v1/viewer',
       reports: '/api/v1/reports',
+      species: '/api/v1/species',
     },
   });
 });

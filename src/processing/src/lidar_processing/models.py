@@ -955,3 +955,368 @@ class GenerateReportRequest(BaseModel):
         default=None,
         description="Optional stand boundary polygons as GeoJSON",
     )
+
+
+# ============================================================================
+# Species Classification Models (Sprint 13-14)
+# ============================================================================
+
+
+class TreeFeatures(BaseModel):
+    """
+    Features extracted from a tree point cloud for species classification.
+
+    These features capture structural and intensity characteristics that
+    can distinguish between different tree species.
+    """
+
+    # Core height metrics
+    height: float = Field(..., description="Maximum tree height in meters")
+    height_mean: float | None = Field(
+        default=None,
+        description="Mean point height in meters",
+    )
+    height_std: float | None = Field(
+        default=None,
+        description="Standard deviation of point heights",
+    )
+    height_percentiles: list[float] = Field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0],
+        description="Height percentiles: 25, 50, 75, 90, 95",
+    )
+    height_skewness: float | None = Field(
+        default=None,
+        description="Skewness of height distribution",
+    )
+    height_kurtosis: float | None = Field(
+        default=None,
+        description="Kurtosis of height distribution",
+    )
+
+    # Crown shape metrics
+    crown_diameter: float = Field(
+        ...,
+        description="Crown diameter in meters",
+    )
+    crown_area: float = Field(
+        ...,
+        description="Crown area in square meters",
+    )
+    crown_asymmetry: float | None = Field(
+        default=None,
+        description="Crown shape asymmetry (0=symmetric, 1=max asymmetry)",
+    )
+    crown_density: float = Field(
+        default=0.5,
+        description="Point density within crown (points per m2)",
+    )
+    crown_perimeter: float | None = Field(
+        default=None,
+        description="Crown perimeter in meters",
+    )
+    crown_circularity: float | None = Field(
+        default=None,
+        description="Crown circularity (1.0=perfect circle)",
+    )
+
+    # Vertical distribution metrics
+    vertical_complexity: float = Field(
+        default=0.5,
+        description="Vertical structure complexity (0-1 entropy-based)",
+    )
+    canopy_relief_ratio: float | None = Field(
+        default=None,
+        description="Canopy relief ratio (mean-min)/(max-min)",
+    )
+    gap_fraction: float | None = Field(
+        default=None,
+        description="Fraction of empty height bins",
+    )
+    layer_count: int | None = Field(
+        default=None,
+        description="Number of distinct vertical layers",
+    )
+    crown_base_height: float | None = Field(
+        default=None,
+        description="Height to crown base in meters",
+    )
+    crown_length_ratio: float | None = Field(
+        default=None,
+        description="Crown length relative to total height",
+    )
+
+    # Point density patterns
+    point_density_upper: float | None = Field(
+        default=None,
+        description="Fraction of points in upper third",
+    )
+    point_density_mid: float | None = Field(
+        default=None,
+        description="Fraction of points in middle third",
+    )
+    point_density_lower: float | None = Field(
+        default=None,
+        description="Fraction of points in lower third",
+    )
+    point_count: int = Field(
+        default=0,
+        description="Total number of points in tree segment",
+    )
+
+    # Intensity statistics (if available)
+    intensity_mean: float | None = Field(
+        default=None,
+        description="Mean point intensity",
+    )
+    intensity_std: float | None = Field(
+        default=None,
+        description="Standard deviation of intensity",
+    )
+    intensity_max: float | None = Field(
+        default=None,
+        description="Maximum intensity value",
+    )
+    intensity_percentile_90: float | None = Field(
+        default=None,
+        description="90th percentile of intensity",
+    )
+
+    # Return number distribution (if available)
+    first_return_ratio: float | None = Field(
+        default=None,
+        description="Ratio of first returns to total",
+    )
+    last_return_ratio: float | None = Field(
+        default=None,
+        description="Ratio of last returns to total",
+    )
+    single_return_ratio: float | None = Field(
+        default=None,
+        description="Ratio of single returns to total",
+    )
+
+
+class SpeciesPrediction(BaseModel):
+    """
+    Species prediction result for a single tree.
+
+    Includes the predicted species, confidence score, and
+    probability distribution across all species classes.
+    """
+
+    species_code: str = Field(
+        ...,
+        description="Predicted species code (e.g., 'PSME' for Douglas-fir)",
+    )
+    species_name: str = Field(
+        ...,
+        description="Common name of the predicted species",
+    )
+    confidence: float = Field(
+        ...,
+        description="Prediction confidence (0-1)",
+        ge=0,
+        le=1,
+    )
+    probabilities: dict[str, float] = Field(
+        default_factory=dict,
+        description="Probability for each species class",
+    )
+
+
+class ClassificationMetrics(BaseModel):
+    """
+    Evaluation metrics for species classification model.
+
+    Includes overall accuracy and per-class precision, recall,
+    and F1 scores, along with the confusion matrix.
+    """
+
+    accuracy: float = Field(
+        ...,
+        description="Overall classification accuracy (0-1)",
+        ge=0,
+        le=1,
+    )
+    precision: dict[str, float] = Field(
+        default_factory=dict,
+        description="Precision for each species class",
+    )
+    recall: dict[str, float] = Field(
+        default_factory=dict,
+        description="Recall for each species class",
+    )
+    f1_score: dict[str, float] = Field(
+        default_factory=dict,
+        description="F1 score for each species class",
+    )
+    confusion_matrix: list[list[int]] = Field(
+        default_factory=list,
+        description="Confusion matrix as 2D list",
+    )
+    class_labels: list[str] = Field(
+        default_factory=list,
+        description="List of class labels in matrix order",
+    )
+
+
+class LabeledTree(BaseModel):
+    """
+    A tree with known species label for training/evaluation.
+
+    Used for building training datasets and evaluating classifier
+    performance.
+    """
+
+    tree_id: str = Field(
+        ...,
+        description="Unique identifier for the tree",
+    )
+    species_code: str = Field(
+        ...,
+        description="Known species code (ground truth)",
+    )
+    features: TreeFeatures = Field(
+        ...,
+        description="Extracted tree features",
+    )
+    source: str = Field(
+        default="manual",
+        description="Source of the label (manual, field, photo, etc.)",
+    )
+    confidence: float = Field(
+        default=1.0,
+        description="Confidence in the label (0-1)",
+        ge=0,
+        le=1,
+    )
+    notes: str | None = Field(
+        default=None,
+        description="Additional notes about the tree",
+    )
+
+
+class ClassifySpeciesRequest(BaseModel):
+    """Request model for species classification."""
+
+    tree_features: list[TreeFeatures] = Field(
+        ...,
+        description="List of tree features to classify",
+        min_length=1,
+    )
+    region: str = Field(
+        default="pnw",
+        description="Geographic region for species lookup",
+    )
+    use_heuristics: bool = Field(
+        default=True,
+        description="Use domain heuristics to improve low-confidence predictions",
+    )
+
+
+class ClassifySpeciesResponse(BaseModel):
+    """Response model for species classification."""
+
+    predictions: list[SpeciesPrediction] = Field(
+        ...,
+        description="Species predictions for each tree",
+    )
+    processing_time_ms: float = Field(
+        ...,
+        description="Processing time in milliseconds",
+    )
+    region: str = Field(
+        ...,
+        description="Region used for classification",
+    )
+    model_version: str = Field(
+        default="1.0.0",
+        description="Model version used",
+    )
+
+
+class TrainClassifierRequest(BaseModel):
+    """Request model for training a new classifier."""
+
+    training_data: list[LabeledTree] = Field(
+        ...,
+        description="Labeled training data",
+        min_length=10,
+    )
+    region: str = Field(
+        default="pnw",
+        description="Geographic region for the model",
+    )
+    test_size: float = Field(
+        default=0.2,
+        description="Fraction of data for testing",
+        gt=0,
+        lt=1,
+    )
+    n_estimators: int = Field(
+        default=100,
+        description="Number of trees in the random forest",
+        ge=10,
+        le=500,
+    )
+    max_depth: int | None = Field(
+        default=15,
+        description="Maximum tree depth (None for unlimited)",
+    )
+    save_model: bool = Field(
+        default=True,
+        description="Whether to save the trained model",
+    )
+
+
+class TrainClassifierResponse(BaseModel):
+    """Response model for classifier training."""
+
+    success: bool = Field(..., description="Whether training succeeded")
+    metrics: ClassificationMetrics | None = Field(
+        default=None,
+        description="Evaluation metrics on test set",
+    )
+    cross_validation_accuracy: float | None = Field(
+        default=None,
+        description="Mean cross-validation accuracy",
+    )
+    model_path: str | None = Field(
+        default=None,
+        description="Path where model was saved",
+    )
+    training_time_ms: float = Field(
+        ...,
+        description="Total training time in milliseconds",
+    )
+    n_training_samples: int = Field(
+        ...,
+        description="Number of training samples used",
+    )
+    n_classes: int = Field(
+        ...,
+        description="Number of species classes",
+    )
+
+
+class RegionInfo(BaseModel):
+    """Information about a supported geographic region."""
+
+    code: str = Field(..., description="Region code (e.g., 'pnw')")
+    name: str = Field(..., description="Full region name")
+    states: list[str] = Field(..., description="States/areas covered")
+    description: str = Field(..., description="Region description")
+    species_count: int = Field(..., description="Number of species in region")
+    dominant_species: list[str] = Field(
+        default_factory=list,
+        description="Dominant species codes",
+    )
+
+
+class SpeciesInfo(BaseModel):
+    """Information about a tree species."""
+
+    code: str = Field(..., description="Species code (e.g., 'PSME')")
+    name: str = Field(..., description="Common name")
+    scientific_name: str = Field(..., description="Scientific name")
+    category: str = Field(..., description="Category: conifer or deciduous")

@@ -5,6 +5,7 @@ export { useFileStore } from './fileStore';
 export { useProcessingStore } from './processingStore';
 export { useViewerStore } from './viewerStore';
 export { useReportStore } from './reportStore';
+export { useSpeciesStore } from './speciesStore';
 
 // Re-export viewer store types
 export type {
@@ -20,3 +21,6 @@ export type {
   ViewerFile,
   StatusInfo,
 } from './viewerStore';
+
+// Re-export species store types
+export type { SpeciesState } from './speciesStore';

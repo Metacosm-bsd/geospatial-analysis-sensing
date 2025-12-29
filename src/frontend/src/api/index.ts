@@ -95,3 +95,24 @@ export type {
   ReportStatusResponse,
   ListReportsResponse,
 } from './reports';
+
+// Species API
+export {
+  classifySpecies,
+  getSpeciesPredictions,
+  getSupportedRegions,
+  getRegionSpecies,
+  updateTreeSpecies,
+  getProjectSpeciesBreakdown,
+  pollClassificationStatus,
+} from './species';
+export type {
+  SpeciesClassificationOptions,
+  SpeciesPrediction,
+  SpeciesClassificationResult,
+  SpeciesBreakdownItem,
+  Region,
+  SpeciesInfo,
+  UpdateTreeSpeciesRequest,
+  ClassifySpeciesResponse,
+} from './species';

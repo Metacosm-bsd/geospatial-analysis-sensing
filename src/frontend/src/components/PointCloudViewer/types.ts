@@ -181,8 +181,16 @@ export interface DetectedTree {
   height: number;
   dbh?: number; // Diameter at breast height (cm)
   crownDiameter?: number;
-  species?: string;
-  speciesConfidence?: number;
+  species?: string; // Species code (e.g., 'PSME' for Douglas-fir)
+  speciesCode?: string; // Alias for species
+  speciesName?: string; // Common name (e.g., 'Douglas-fir')
+  speciesConfidence?: number; // 0-1 confidence score
+  speciesManualOverride?: boolean; // True if manually classified
+  alternativeSpecies?: Array<{
+    code: string;
+    name: string;
+    confidence: number;
+  }>;
   biomass?: number; // kg
   carbonStock?: number; // kg CO2e
   crown?: {

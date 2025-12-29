@@ -186,3 +186,6 @@ export * from './viewer.js';
 
 // Re-export report types (Sprint 11-12)
 export * from './report.js';
+
+// Re-export species types (Sprint 13-14)
+export * from './species.js';

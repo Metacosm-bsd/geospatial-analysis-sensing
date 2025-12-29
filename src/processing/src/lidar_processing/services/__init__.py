@@ -19,6 +19,21 @@ from lidar_processing.services.pdf_generator import PDFGenerator
 from lidar_processing.services.excel_generator import ExcelGenerator
 from lidar_processing.services.report_generator import ReportGenerator, generate_report
 
+# Species Classification Services (Sprint 13-14)
+from lidar_processing.services.species_classifier import SpeciesClassifier
+from lidar_processing.services.feature_extractor import TreeFeatureExtractor
+from lidar_processing.services.training_pipeline import TrainingPipeline, create_synthetic_training_data
+from lidar_processing.services.species_config import (
+    SPECIES_BY_REGION,
+    REGION_METADATA,
+    SpeciesInfo,
+    get_species_for_region,
+    get_species_info,
+    get_region_metadata,
+    get_all_regions,
+    get_species_codes_for_region,
+)
+
 __all__ = [
     # Core Processing Services
     "LidarValidator",
@@ -36,4 +51,17 @@ __all__ = [
     "ExcelGenerator",
     "ReportGenerator",
     "generate_report",
+    # Species Classification Services
+    "SpeciesClassifier",
+    "TreeFeatureExtractor",
+    "TrainingPipeline",
+    "create_synthetic_training_data",
+    "SPECIES_BY_REGION",
+    "REGION_METADATA",
+    "SpeciesInfo",
+    "get_species_for_region",
+    "get_species_info",
+    "get_region_metadata",
+    "get_all_regions",
+    "get_species_codes_for_region",
 ]

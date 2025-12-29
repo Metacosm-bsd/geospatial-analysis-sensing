@@ -212,6 +212,9 @@ model Analysis {
   // Reports generated from this analysis
   reports       Report[]
 
+  // Tree detections from this analysis (Sprint 13-14)
+  treeDetections TreeDetection[]
+
   // Timestamps
   createdAt     DateTime       @default(now()) @map("created_at")
   updatedAt     DateTime       @updatedAt @map("updated_at")
@@ -319,6 +322,44 @@ enum JobStatus {
   FAILED
   DELAYED
   PAUSED
+}
+
+// ============================================================================
+// Tree Detection (Sprint 13-14)
+// ============================================================================
+
+model TreeDetection {
+  id                String   @id @default(uuid())
+
+  // Relation to analysis
+  analysisId        String   @map("analysis_id")
+  analysis          Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  // Spatial coordinates
+  x                 Float    // X coordinate (eastings)
+  y                 Float    // Y coordinate (northings)
+  z                 Float    // Z coordinate (elevation)
+
+  // Tree measurements
+  height            Float    // Tree height in meters
+  crownDiameter     Float    @map("crown_diameter") // Crown diameter in meters
+  dbh               Float?   // Diameter at breast height in meters (optional)
+
+  // Species classification (Sprint 13-14)
+  speciesCode       String?  @map("species_code")     // Species code (e.g., 'PSME')
+  speciesName       String?  @map("species_name")     // Species scientific name
+  speciesConfidence Float?   @map("species_confidence") // Classification confidence (0-1)
+
+  // Biomass and carbon estimates
+  biomass           Float?   // Above-ground biomass in kg
+  carbon            Float?   // Carbon content in kg
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@index([analysisId])
+  @@index([speciesCode])
+  @@map("tree_detections")
 }
 
 // ============================================================================

@@ -21,6 +21,8 @@ from fastapi.responses import JSONResponse
 from lidar_processing import __version__
 from lidar_processing.config import Settings, configure_logging, get_settings
 from lidar_processing.models import (
+    ClassifySpeciesRequest,
+    ClassifySpeciesResponse,
     ErrorResponse,
     ExtractMetadataRequest,
     GenerateReportRequest,
@@ -28,10 +30,15 @@ from lidar_processing.models import (
     JobResponse,
     JobStatus,
     JobType,
+    LabeledTree,
     LidarMetadata,
     QueueJobRequest,
+    RegionInfo,
     ReportResult,
     ReportStatus,
+    SpeciesInfo as SpeciesInfoModel,
+    TrainClassifierRequest,
+    TrainClassifierResponse,
     TreeMetrics,
     ValidateRequest,
     ValidationResult,
@@ -40,6 +47,14 @@ from lidar_processing.services.lidar_validator import LidarValidator
 from lidar_processing.services.metadata_extractor import MetadataExtractor
 from lidar_processing.services.point_extractor import PointExtractor
 from lidar_processing.services.report_generator import ReportGenerator
+from lidar_processing.services.species_classifier import SpeciesClassifier
+from lidar_processing.services.species_config import (
+    REGION_METADATA,
+    SPECIES_BY_REGION,
+    get_all_regions,
+    get_region_metadata,
+    get_species_for_region,
+)
 from lidar_processing.workers.queue_worker import QueueWorker
 
 logger = logging.getLogger(__name__)
@@ -49,6 +64,7 @@ _start_time: float = 0.0
 _redis_client: redis.Redis | None = None
 _queue_worker: QueueWorker | None = None
 _report_generator: ReportGenerator | None = None
+_species_classifiers: dict[str, SpeciesClassifier] = {}
 
 
 @asynccontextmanager
@@ -825,6 +841,290 @@ def _register_routes(app: FastAPI, settings: Settings) -> None:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Report generation failed: {str(e)}",
+            )
+
+    # ========================================================================
+    # Species Classification Endpoints (Sprint 13-14)
+    # ========================================================================
+
+    def _get_classifier(region: str) -> SpeciesClassifier:
+        """Get or create a species classifier for the given region."""
+        if region not in _species_classifiers:
+            try:
+                _species_classifiers[region] = SpeciesClassifier(region=region)
+                logger.info("Initialized species classifier for region: %s", region)
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=str(e),
+                )
+        return _species_classifiers[region]
+
+    @app.post(
+        "/api/v1/classify-species",
+        response_model=ClassifySpeciesResponse,
+        tags=["Species Classification"],
+        summary="Classify tree species",
+        description="""
+        Predicts species for trees based on their extracted features.
+
+        Uses a Random Forest classifier trained on LiDAR-derived structural
+        features to predict the most likely species for each tree.
+
+        Returns predictions with confidence scores and probability
+        distributions across all species classes for the specified region.
+        """,
+        responses={
+            200: {"description": "Species predictions returned successfully"},
+            400: {"description": "Invalid region or request parameters"},
+            422: {"description": "Validation error in request body"},
+        },
+    )
+    async def classify_species(
+        request: ClassifySpeciesRequest,
+    ) -> ClassifySpeciesResponse:
+        """Classify tree species from features."""
+        start_time = time.time()
+
+        try:
+            classifier = _get_classifier(request.region)
+
+            # Classify trees
+            if request.use_heuristics:
+                predictions = [
+                    classifier.predict_with_heuristics(features)
+                    for features in request.tree_features
+                ]
+            else:
+                predictions = classifier.predict(request.tree_features)
+
+            processing_time = (time.time() - start_time) * 1000
+
+            return ClassifySpeciesResponse(
+                predictions=predictions,
+                processing_time_ms=round(processing_time, 2),
+                region=request.region,
+                model_version="1.0.0",
+            )
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("Species classification failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Classification failed: {str(e)}",
+            )
+
+    @app.post(
+        "/api/v1/train-classifier",
+        response_model=TrainClassifierResponse,
+        tags=["Species Classification"],
+        summary="Train a new species classifier (admin)",
+        description="""
+        Trains a new Random Forest species classification model from
+        labeled training data.
+
+        This endpoint is intended for administrators and requires
+        a minimum of 10 labeled samples. The trained model is saved
+        and automatically loaded for future classification requests.
+
+        Training includes:
+        - 5-fold cross-validation for performance estimation
+        - Stratified train/test split
+        - Automatic feature scaling
+        - Model persistence
+        """,
+        responses={
+            200: {"description": "Model trained successfully"},
+            400: {"description": "Invalid training data or parameters"},
+            422: {"description": "Validation error in request body"},
+        },
+    )
+    async def train_classifier(
+        request: TrainClassifierRequest,
+    ) -> TrainClassifierResponse:
+        """Train a new species classification model."""
+        start_time = time.time()
+
+        try:
+            from lidar_processing.services.training_pipeline import TrainingPipeline
+
+            pipeline = TrainingPipeline(region=request.region)
+
+            # Prepare data
+            X_train, X_test, y_train, y_test = pipeline.prepare_training_set(
+                request.training_data,
+                test_size=request.test_size,
+            )
+
+            # Cross-validation
+            cv_results = pipeline.cross_validate(
+                X_train,
+                y_train,
+                model_params={
+                    "n_estimators": request.n_estimators,
+                    "max_depth": request.max_depth,
+                },
+            )
+
+            # Train model
+            model_params = {
+                "n_estimators": request.n_estimators,
+                "max_depth": request.max_depth,
+                "min_samples_split": 5,
+            }
+            pipeline.train_model(X_train, y_train, model_params)
+
+            # Evaluate
+            metrics = pipeline.evaluate_model(X_test, y_test)
+
+            # Save model if requested
+            model_path = None
+            if request.save_model:
+                model_path = f"models/species_classifier_{request.region}.joblib"
+                pipeline.save_model(model_path)
+
+                # Update the cached classifier
+                _species_classifiers[request.region] = SpeciesClassifier(
+                    model_path=model_path,
+                    region=request.region,
+                )
+
+            processing_time = (time.time() - start_time) * 1000
+
+            return TrainClassifierResponse(
+                success=True,
+                metrics=metrics,
+                cross_validation_accuracy=cv_results["accuracy"]["mean"],
+                model_path=model_path,
+                training_time_ms=round(processing_time, 2),
+                n_training_samples=len(request.training_data),
+                n_classes=len(pipeline._label_encoder.classes_),
+            )
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("Model training failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Training failed: {str(e)}",
+            )
+
+    @app.get(
+        "/api/v1/species/regions",
+        response_model=list[RegionInfo],
+        tags=["Species Classification"],
+        summary="List supported regions",
+        description="""
+        Returns a list of all supported geographic regions for species
+        classification, along with metadata about each region.
+        """,
+        responses={
+            200: {"description": "List of regions returned successfully"},
+        },
+    )
+    async def list_regions() -> list[RegionInfo]:
+        """List all supported regions."""
+        regions = []
+
+        for region_code in get_all_regions():
+            metadata = get_region_metadata(region_code)
+            species_dict = get_species_for_region(region_code)
+
+            regions.append(
+                RegionInfo(
+                    code=region_code,
+                    name=metadata["name"],
+                    states=metadata["states"],
+                    description=metadata["description"],
+                    species_count=len(species_dict),
+                    dominant_species=metadata.get("dominant_species", []),
+                )
+            )
+
+        return regions
+
+    @app.get(
+        "/api/v1/species/{region}",
+        response_model=list[SpeciesInfoModel],
+        tags=["Species Classification"],
+        summary="Get species for a region",
+        description="""
+        Returns a list of all tree species supported for classification
+        in the specified geographic region.
+
+        Each species includes its code, common name, scientific name,
+        and category (conifer or deciduous).
+        """,
+        responses={
+            200: {"description": "Species list returned successfully"},
+            404: {"description": "Region not found"},
+        },
+    )
+    async def get_species_by_region(region: str) -> list[SpeciesInfoModel]:
+        """Get species for a specific region."""
+        try:
+            species_dict = get_species_for_region(region.lower())
+
+            return [
+                SpeciesInfoModel(
+                    code=info.code,
+                    name=info.name,
+                    scientific_name=info.scientific_name,
+                    category=info.category,
+                )
+                for info in species_dict.values()
+            ]
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(e),
+            )
+
+    @app.get(
+        "/api/v1/classifier/{region}/info",
+        tags=["Species Classification"],
+        summary="Get classifier information",
+        description="""
+        Returns information about the species classifier for a region,
+        including supported species, feature importance rankings, and
+        model status.
+        """,
+        responses={
+            200: {"description": "Classifier info returned successfully"},
+            400: {"description": "Invalid region"},
+        },
+    )
+    async def get_classifier_info(region: str) -> dict[str, Any]:
+        """Get information about a region's classifier."""
+        try:
+            classifier = _get_classifier(region.lower())
+
+            return {
+                "region": region.lower(),
+                "is_trained": classifier.is_trained,
+                "n_classes": classifier.n_classes,
+                "supported_species": classifier.get_supported_species(),
+                "feature_importances": (
+                    classifier.get_feature_importances()
+                    if classifier.is_trained
+                    else None
+                ),
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
             )
 
 

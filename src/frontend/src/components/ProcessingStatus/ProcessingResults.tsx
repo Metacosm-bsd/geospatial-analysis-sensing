@@ -8,6 +8,8 @@ export interface ProcessingResultsData {
   processingTimeSeconds: number;
   analysisId: string;
   completedAt?: string;
+  speciesClassified?: boolean; // Whether species classification has been run
+  speciesCount?: number; // Number of species identified
 }
 
 export interface ProcessingResultsProps {
@@ -15,7 +17,9 @@ export interface ProcessingResultsProps {
   onViewFullResults?: () => void;
   onDownloadReport?: () => void;
   onGenerateReport?: () => void;
+  onClassifySpecies?: () => void;
   isDownloading?: boolean;
+  isClassifying?: boolean;
   className?: string;
 }
 
@@ -114,11 +118,21 @@ export function ProcessingResults({
   onViewFullResults,
   onDownloadReport,
   onGenerateReport,
+  onClassifySpecies,
   isDownloading = false,
+  isClassifying = false,
   className = '',
 }: ProcessingResultsProps) {
-  const { treeCount, averageHeight, maxHeight, canopyCoverage, processingTimeSeconds, completedAt } =
-    results;
+  const {
+    treeCount,
+    averageHeight,
+    maxHeight,
+    canopyCoverage,
+    processingTimeSeconds,
+    completedAt,
+    speciesClassified,
+    speciesCount,
+  } = results;
 
   return (
     <div
@@ -327,6 +341,75 @@ export function ProcessingResults({
               </svg>
               Generate Report
             </button>
+          )}
+
+          {onClassifySpecies && !speciesClassified && (
+            <button
+              onClick={onClassifySpecies}
+              disabled={isClassifying}
+              className="flex-1 inline-flex items-center justify-center px-4 py-2.5 text-sm font-medium text-forest-700 bg-forest-50 border border-forest-300 rounded-lg hover:bg-forest-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isClassifying ? (
+                <>
+                  <svg
+                    className="w-4 h-4 mr-2 animate-spin"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    />
+                  </svg>
+                  Classifying...
+                </>
+              ) : (
+                <>
+                  <svg
+                    className="w-4 h-4 mr-2"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"
+                    />
+                  </svg>
+                  Classify Species
+                </>
+              )}
+            </button>
+          )}
+
+          {speciesClassified && speciesCount !== undefined && speciesCount > 0 && (
+            <div className="flex-1 inline-flex items-center justify-center px-4 py-2.5 text-sm font-medium text-green-700 bg-green-50 border border-green-200 rounded-lg">
+              <svg
+                className="w-4 h-4 mr-2 text-green-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M5 13l4 4L19 7"
+                />
+              </svg>
+              {speciesCount} Species Identified
+            </div>
           )}
         </div>
       </div>

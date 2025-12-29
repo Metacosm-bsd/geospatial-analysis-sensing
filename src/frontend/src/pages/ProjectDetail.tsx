@@ -2,12 +2,15 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useProjectStore } from '../store/projectStore';
 import { useProcessingStore } from '../store/processingStore';
+// Species store available for future use
+// import { useSpeciesStore } from '../store/speciesStore';
 import { FileUploader } from '../components/FileUploader';
 import {
   ProcessingProgress,
   ProcessingResults,
   DEFAULT_STAGES,
 } from '../components/ProcessingStatus';
+import { SpeciesClassifier, SpeciesBreakdown } from '../components/Species';
 import type { StageInfo, StageType } from '../components/ProcessingStatus';
 import type { ProjectStatus, Analysis } from '../types';
 
@@ -674,23 +677,39 @@ function ProjectDetail() {
 
                 {/* Show ProcessingResults for completed analyses */}
                 {selectedJob.progress?.status === 'completed' && selectedJob.results && (
-                  <ProcessingResults
-                    results={{
-                      treeCount: selectedJob.results.treeCount,
-                      averageHeight: selectedJob.results.averageHeight,
-                      maxHeight: selectedJob.results.maxHeight,
-                      canopyCoverage: selectedJob.results.canopyCoverage,
-                      processingTimeSeconds: selectedJob.results.processingTimeSeconds,
-                      analysisId: selectedAnalysisId,
-                      completedAt: selectedJob.results.completedAt,
-                    }}
-                    onViewFullResults={() => {
-                      // Navigate to detailed results page (future implementation)
-                      console.log('View full results for', selectedAnalysisId);
-                    }}
-                    onDownloadReport={() => handleDownloadReport(selectedAnalysisId)}
-                    isDownloading={isDownloadingReport[selectedAnalysisId] ?? false}
-                  />
+                  <div className="space-y-6">
+                    <ProcessingResults
+                      results={{
+                        treeCount: selectedJob.results.treeCount,
+                        averageHeight: selectedJob.results.averageHeight,
+                        maxHeight: selectedJob.results.maxHeight,
+                        canopyCoverage: selectedJob.results.canopyCoverage,
+                        processingTimeSeconds: selectedJob.results.processingTimeSeconds,
+                        analysisId: selectedAnalysisId,
+                        completedAt: selectedJob.results.completedAt,
+                      }}
+                      onViewFullResults={() => {
+                        // Navigate to detailed results page (future implementation)
+                        console.log('View full results for', selectedAnalysisId);
+                      }}
+                      onDownloadReport={() => handleDownloadReport(selectedAnalysisId)}
+                      isDownloading={isDownloadingReport[selectedAnalysisId] ?? false}
+                    />
+
+                    {/* Species Classification Section */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      <SpeciesClassifier
+                        analysisId={selectedAnalysisId}
+                        onClassificationComplete={() => {
+                          // Refresh data when classification completes
+                          if (id) {
+                            fetchProjectAnalyses(id);
+                          }
+                        }}
+                      />
+                      <SpeciesBreakdown />
+                    </div>
+                  </div>
                 )}
 
                 {/* Show error state for failed analyses */}

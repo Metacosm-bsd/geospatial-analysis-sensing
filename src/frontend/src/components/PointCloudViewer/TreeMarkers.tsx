@@ -2,6 +2,7 @@
  * TreeMarkers.tsx
  * 3D tree markers for point cloud visualization
  * Sprint 9-10: 3D Visualization Features
+ * Updated Sprint 13-14: Species color integration
  */
 
 import React, { useMemo, useRef, useCallback } from 'react';
@@ -13,11 +14,12 @@ import type {
   TreeMarkerOptions,
   OnTreeSelect,
   OnTreeHover,
-  DEFAULT_SPECIES_COLORS,
 } from './types';
+import { DEFAULT_SPECIES_COLORS } from './types';
+import { SPECIES_COLORS, getSpeciesColor } from '../Species/speciesColors';
 
 // Re-export for convenience
-export { DEFAULT_SPECIES_COLORS };
+export { DEFAULT_SPECIES_COLORS, SPECIES_COLORS };
 
 interface TreeMarkersProps {
   trees: DetectedTree[];
@@ -87,7 +89,11 @@ function getTreeColor(
 ): THREE.Color {
   switch (options.colorBy) {
     case 'species':
-      const speciesColor = speciesColors[tree.species || 'Unknown'] || '#9E9E9E';
+      // Use species code from tree, with fallback to SPECIES_COLORS config
+      const speciesCode = tree.speciesCode || tree.species;
+      const speciesColor = speciesCode
+        ? getSpeciesColor(speciesCode)
+        : speciesColors[tree.species || 'Unknown'] || '#9E9E9E';
       return new THREE.Color(speciesColor);
 
     case 'height':
