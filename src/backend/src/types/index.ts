@@ -183,3 +183,6 @@ export * from './processing.js';
 
 // Re-export viewer types (Sprint 9-10)
 export * from './viewer.js';
+
+// Re-export report types (Sprint 11-12)
+export * from './report.js';

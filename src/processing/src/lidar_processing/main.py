@@ -23,18 +23,23 @@ from lidar_processing.config import Settings, configure_logging, get_settings
 from lidar_processing.models import (
     ErrorResponse,
     ExtractMetadataRequest,
+    GenerateReportRequest,
     HealthResponse,
     JobResponse,
     JobStatus,
     JobType,
     LidarMetadata,
     QueueJobRequest,
+    ReportResult,
+    ReportStatus,
+    TreeMetrics,
     ValidateRequest,
     ValidationResult,
 )
 from lidar_processing.services.lidar_validator import LidarValidator
 from lidar_processing.services.metadata_extractor import MetadataExtractor
 from lidar_processing.services.point_extractor import PointExtractor
+from lidar_processing.services.report_generator import ReportGenerator
 from lidar_processing.workers.queue_worker import QueueWorker
 
 logger = logging.getLogger(__name__)
@@ -43,6 +48,7 @@ logger = logging.getLogger(__name__)
 _start_time: float = 0.0
 _redis_client: redis.Redis | None = None
 _queue_worker: QueueWorker | None = None
+_report_generator: ReportGenerator | None = None
 
 
 @asynccontextmanager
@@ -52,13 +58,16 @@ async def lifespan(app: FastAPI):
 
     Handles startup and shutdown events.
     """
-    global _start_time, _redis_client, _queue_worker
+    global _start_time, _redis_client, _queue_worker, _report_generator
 
     # Startup
     settings = get_settings()
     configure_logging(settings)
 
     _start_time = time.time()
+
+    # Initialize report generator
+    _report_generator = ReportGenerator(settings)
 
     # Initialize Redis connection
     try:
@@ -555,6 +564,267 @@ def _register_routes(app: FastAPI, settings: Settings) -> None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=str(e),
+            )
+
+    # ========================================================================
+    # Report Generation Endpoints (Sprint 11-12)
+    # ========================================================================
+
+    @app.post(
+        "/api/v1/reports/generate",
+        response_model=ReportResult,
+        tags=["Reports"],
+        summary="Generate forest inventory report",
+        description="""
+        Generates a professional forest inventory report from analysis results.
+
+        Supports multiple output formats:
+        - PDF: Professional formatted report with charts and tables
+        - Excel: Multi-sheet workbook with detailed data
+        - Both: Generate both PDF and Excel
+
+        Report includes:
+        - Executive summary with key metrics
+        - Species distribution analysis
+        - Height and DBH distributions
+        - Stand-level summaries (if boundaries provided)
+        - Complete tree inventory table
+        - Methodology documentation
+        """,
+        responses={
+            200: {"description": "Report generated successfully"},
+            400: {"description": "Invalid request parameters"},
+            500: {"description": "Report generation failed"},
+        },
+    )
+    async def generate_report(
+        request: GenerateReportRequest,
+        tree_data: list[TreeMetrics] | None = None,
+    ) -> ReportResult:
+        """Generate a forest inventory report."""
+        if not _report_generator:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Report generator not initialized",
+            )
+
+        # In production, tree_data would be fetched from storage using analysis_id
+        # For now, require tree_data to be provided or return an error
+        if tree_data is None:
+            # Try to fetch from storage (placeholder)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Tree data must be provided. In production, this would be fetched from analysis storage.",
+            )
+
+        try:
+            result = _report_generator.generate_inventory_report(
+                analysis_id=request.analysis_id,
+                tree_data=tree_data,
+                project_info=request.project_info,
+                output_format=request.output_format.value,
+                options=request.options,
+                output_directory=request.output_directory,
+                stand_boundaries=request.stand_boundaries,
+            )
+            return result
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("Report generation failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Report generation failed: {str(e)}",
+            )
+
+    @app.get(
+        "/api/v1/reports/{report_id}/status",
+        response_model=ReportResult,
+        tags=["Reports"],
+        summary="Get report generation status",
+        description="Returns the status and details of a report generation request.",
+        responses={
+            200: {"description": "Report status retrieved"},
+            404: {"description": "Report not found"},
+        },
+    )
+    async def get_report_status(report_id: str) -> ReportResult:
+        """Get the status of a report generation."""
+        if not _report_generator:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Report generator not initialized",
+            )
+
+        result = _report_generator.get_report_status(report_id)
+
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Report not found: {report_id}",
+            )
+
+        return result
+
+    @app.get(
+        "/api/v1/reports/{report_id}/download",
+        tags=["Reports"],
+        summary="Download generated report",
+        description="""
+        Downloads a generated report file.
+
+        Specify the format parameter to choose which file to download:
+        - pdf: Download the PDF report
+        - excel: Download the Excel workbook
+        """,
+        responses={
+            200: {"description": "Report file returned"},
+            404: {"description": "Report or file not found"},
+        },
+    )
+    async def download_report(
+        report_id: str,
+        format: str = "pdf",
+    ) -> Any:
+        """Download a generated report file."""
+        from fastapi.responses import FileResponse
+
+        if not _report_generator:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Report generator not initialized",
+            )
+
+        result = _report_generator.get_report_status(report_id)
+
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Report not found: {report_id}",
+            )
+
+        if result.status != ReportStatus.COMPLETED:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Report is not ready. Status: {result.status.value}",
+            )
+
+        # Get the appropriate file path
+        if format.lower() == "pdf":
+            file_path = result.pdf_path
+            media_type = "application/pdf"
+            filename = f"report_{report_id}.pdf"
+        elif format.lower() in ("excel", "xlsx"):
+            file_path = result.excel_path
+            media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            filename = f"report_{report_id}.xlsx"
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid format: {format}. Use 'pdf' or 'excel'.",
+            )
+
+        if file_path is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No {format} file available for this report",
+            )
+
+        from pathlib import Path
+        if not Path(file_path).exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Report file not found on disk: {file_path}",
+            )
+
+        return FileResponse(
+            path=file_path,
+            media_type=media_type,
+            filename=filename,
+        )
+
+    @app.post(
+        "/api/v1/reports/generate-direct",
+        response_model=ReportResult,
+        tags=["Reports"],
+        summary="Generate report with inline tree data",
+        description="""
+        Generates a report with tree data provided directly in the request body.
+
+        This is useful for testing or when tree data is not stored in the system.
+        For production use with stored analysis results, use the /reports/generate endpoint.
+        """,
+        responses={
+            200: {"description": "Report generated successfully"},
+            400: {"description": "Invalid request parameters"},
+            500: {"description": "Report generation failed"},
+        },
+    )
+    async def generate_report_direct(
+        analysis_id: str,
+        project_name: str,
+        tree_data: list[TreeMetrics],
+        output_format: str = "both",
+        client_name: str | None = None,
+        location: str | None = None,
+        output_directory: str | None = None,
+        include_charts: bool = True,
+        include_tree_list: bool = True,
+        include_methodology: bool = True,
+    ) -> ReportResult:
+        """Generate a report with tree data provided directly."""
+        from lidar_processing.models import ProjectInfo, ReportOptions, UnitSystem
+
+        if not _report_generator:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Report generator not initialized",
+            )
+
+        if not tree_data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Tree data cannot be empty",
+            )
+
+        try:
+            project_info = ProjectInfo(
+                project_name=project_name,
+                client_name=client_name,
+                location=location,
+            )
+
+            options = ReportOptions(
+                include_charts=include_charts,
+                include_tree_list=include_tree_list,
+                include_methodology=include_methodology,
+                units=UnitSystem.METRIC,
+            )
+
+            result = _report_generator.generate_inventory_report(
+                analysis_id=analysis_id,
+                tree_data=tree_data,
+                project_info=project_info,
+                output_format=output_format,
+                options=options,
+                output_directory=output_directory,
+            )
+            return result
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("Report generation failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Report generation failed: {str(e)}",
             )
 
 

@@ -637,3 +637,321 @@ def get_classification_name(code: int) -> str:
         return f"User Defined ({code})"
     else:
         return f"Unknown ({code})"
+
+
+# ============================================================================
+# Report Generation Models (Sprint 11-12)
+# ============================================================================
+
+
+class UnitSystem(str, Enum):
+    """Unit system for reports."""
+
+    METRIC = "metric"
+    IMPERIAL = "imperial"
+
+
+class ReportFormat(str, Enum):
+    """Output format for reports."""
+
+    PDF = "pdf"
+    EXCEL = "excel"
+    BOTH = "both"
+
+
+class ReportStatus(str, Enum):
+    """Status of report generation."""
+
+    PENDING = "pending"
+    GENERATING = "generating"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ReportOptions(BaseModel):
+    """Options for report generation."""
+
+    include_charts: bool = Field(
+        default=True,
+        description="Include charts and visualizations in the report",
+    )
+    include_tree_list: bool = Field(
+        default=True,
+        description="Include detailed tree inventory table",
+    )
+    include_methodology: bool = Field(
+        default=True,
+        description="Include methodology notes section",
+    )
+    include_species_summary: bool = Field(
+        default=True,
+        description="Include species distribution summary",
+    )
+    include_stand_summary: bool = Field(
+        default=True,
+        description="Include stand-level summary if stands are defined",
+    )
+    units: UnitSystem = Field(
+        default=UnitSystem.METRIC,
+        description="Unit system for measurements",
+    )
+    logo_path: str | None = Field(
+        default=None,
+        description="Path to logo image for report header",
+    )
+    company_name: str | None = Field(
+        default=None,
+        description="Company name for report branding",
+    )
+    prepared_by: str | None = Field(
+        default=None,
+        description="Name of report preparer",
+    )
+
+
+class ReportResult(BaseModel):
+    """Result of report generation."""
+
+    report_id: str = Field(..., description="Unique report identifier")
+    analysis_id: str = Field(..., description="Associated analysis ID")
+    status: ReportStatus = Field(..., description="Report generation status")
+    pdf_path: str | None = Field(
+        default=None,
+        description="Path to generated PDF file",
+    )
+    excel_path: str | None = Field(
+        default=None,
+        description="Path to generated Excel file",
+    )
+    generated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        description="Timestamp of report generation",
+    )
+    generation_time_ms: float | None = Field(
+        default=None,
+        description="Time taken to generate report in milliseconds",
+    )
+    file_sizes: dict[str, int] = Field(
+        default_factory=dict,
+        description="File sizes in bytes for each output file",
+    )
+    error: str | None = Field(
+        default=None,
+        description="Error message if generation failed",
+    )
+
+
+class SpeciesMetrics(BaseModel):
+    """Aggregated metrics for a species."""
+
+    species_name: str = Field(..., description="Species name or code")
+    tree_count: int = Field(..., description="Number of trees")
+    percentage: float = Field(..., description="Percentage of total trees")
+    mean_height: float = Field(..., description="Mean height in meters")
+    mean_dbh: float | None = Field(
+        default=None,
+        description="Mean DBH in centimeters",
+    )
+    mean_crown_diameter: float | None = Field(
+        default=None,
+        description="Mean crown diameter in meters",
+    )
+    total_basal_area: float | None = Field(
+        default=None,
+        description="Total basal area in square meters",
+    )
+    total_biomass: float | None = Field(
+        default=None,
+        description="Total above-ground biomass in kg",
+    )
+    total_carbon: float | None = Field(
+        default=None,
+        description="Total carbon stock in kg (biomass * 0.47)",
+    )
+
+
+class SizeClassDistribution(BaseModel):
+    """Distribution of trees by size class."""
+
+    size_class: str = Field(..., description="Size class label (e.g., '10-20cm')")
+    min_value: float = Field(..., description="Minimum value for class")
+    max_value: float = Field(..., description="Maximum value for class")
+    count: int = Field(..., description="Number of trees in class")
+    percentage: float = Field(..., description="Percentage of total trees")
+
+
+class StandMetrics(BaseModel):
+    """Metrics for a forest stand."""
+
+    stand_id: str = Field(..., description="Unique stand identifier")
+    stand_name: str | None = Field(
+        default=None,
+        description="Optional stand name",
+    )
+    area_hectares: float = Field(..., description="Stand area in hectares")
+    tree_count: int = Field(..., description="Number of trees in stand")
+    stems_per_hectare: float = Field(..., description="Stand density (stems/ha)")
+    basal_area_per_hectare: float = Field(
+        ...,
+        description="Basal area per hectare (m2/ha)",
+    )
+    mean_height: float = Field(..., description="Mean tree height in meters")
+    dominant_height: float | None = Field(
+        default=None,
+        description="Dominant height (mean of tallest trees) in meters",
+    )
+    mean_dbh: float | None = Field(
+        default=None,
+        description="Mean DBH in centimeters",
+    )
+    quadratic_mean_dbh: float | None = Field(
+        default=None,
+        description="Quadratic mean DBH in centimeters",
+    )
+    total_volume: float | None = Field(
+        default=None,
+        description="Total stem volume in cubic meters",
+    )
+    volume_per_hectare: float | None = Field(
+        default=None,
+        description="Volume per hectare (m3/ha)",
+    )
+    total_biomass: float | None = Field(
+        default=None,
+        description="Total above-ground biomass in kg",
+    )
+    biomass_per_hectare: float | None = Field(
+        default=None,
+        description="Biomass per hectare (kg/ha)",
+    )
+    total_carbon: float | None = Field(
+        default=None,
+        description="Total carbon stock in kg",
+    )
+    carbon_per_hectare: float | None = Field(
+        default=None,
+        description="Carbon per hectare (kg/ha)",
+    )
+    species_composition: list[SpeciesMetrics] = Field(
+        default_factory=list,
+        description="Species composition within the stand",
+    )
+    dbh_distribution: list[SizeClassDistribution] = Field(
+        default_factory=list,
+        description="DBH size class distribution",
+    )
+    height_distribution: list[SizeClassDistribution] = Field(
+        default_factory=list,
+        description="Height size class distribution",
+    )
+
+
+class ProjectInfo(BaseModel):
+    """Project information for report header."""
+
+    project_name: str = Field(..., description="Project name")
+    project_id: str | None = Field(
+        default=None,
+        description="Project identifier",
+    )
+    client_name: str | None = Field(
+        default=None,
+        description="Client name",
+    )
+    location: str | None = Field(
+        default=None,
+        description="Project location description",
+    )
+    survey_date: datetime | None = Field(
+        default=None,
+        description="Date of LiDAR survey",
+    )
+    analysis_date: datetime = Field(
+        default_factory=datetime.utcnow,
+        description="Date of analysis",
+    )
+    total_area_hectares: float | None = Field(
+        default=None,
+        description="Total project area in hectares",
+    )
+    coordinate_system: str | None = Field(
+        default=None,
+        description="Coordinate reference system used",
+    )
+    notes: str | None = Field(
+        default=None,
+        description="Additional project notes",
+    )
+
+
+class InventorySummary(BaseModel):
+    """Summary statistics for the entire inventory."""
+
+    total_trees: int = Field(..., description="Total number of trees detected")
+    total_area_hectares: float = Field(..., description="Total surveyed area")
+    stems_per_hectare: float = Field(..., description="Overall stand density")
+    mean_height: float = Field(..., description="Mean tree height in meters")
+    max_height: float = Field(..., description="Maximum tree height in meters")
+    min_height: float = Field(..., description="Minimum tree height in meters")
+    std_height: float = Field(..., description="Standard deviation of heights")
+    mean_dbh: float | None = Field(
+        default=None,
+        description="Mean DBH in centimeters",
+    )
+    total_basal_area: float | None = Field(
+        default=None,
+        description="Total basal area in square meters",
+    )
+    basal_area_per_hectare: float | None = Field(
+        default=None,
+        description="Basal area per hectare (m2/ha)",
+    )
+    total_volume: float | None = Field(
+        default=None,
+        description="Total stem volume in cubic meters",
+    )
+    total_biomass: float | None = Field(
+        default=None,
+        description="Total above-ground biomass in kg",
+    )
+    total_carbon: float | None = Field(
+        default=None,
+        description="Total carbon stock in kg",
+    )
+    co2_equivalent: float | None = Field(
+        default=None,
+        description="CO2 equivalent in kg (carbon * 44/12)",
+    )
+    species_count: int = Field(
+        default=0,
+        description="Number of unique species identified",
+    )
+
+
+class GenerateReportRequest(BaseModel):
+    """Request model for report generation."""
+
+    analysis_id: str = Field(
+        ...,
+        description="ID of the analysis to generate report for",
+    )
+    project_info: ProjectInfo = Field(
+        ...,
+        description="Project information for report header",
+    )
+    output_format: ReportFormat = Field(
+        default=ReportFormat.BOTH,
+        description="Output format (pdf, excel, or both)",
+    )
+    options: ReportOptions = Field(
+        default_factory=ReportOptions,
+        description="Report generation options",
+    )
+    output_directory: str | None = Field(
+        default=None,
+        description="Directory for output files (default: temp directory)",
+    )
+    stand_boundaries: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Optional stand boundary polygons as GeoJSON",
+    )

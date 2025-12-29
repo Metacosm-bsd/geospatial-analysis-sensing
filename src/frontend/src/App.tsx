@@ -4,6 +4,7 @@ import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import Projects from './pages/Projects';
 import ProjectDetail from './pages/ProjectDetail';
+import Reports from './pages/Reports';
 import Viewer from './pages/Viewer';
 import Login from './pages/Login';
 import Register from './pages/Register';
@@ -156,6 +157,9 @@ function App() {
         {/* 3D Viewer pages */}
         <Route path="projects/:id/viewer" element={<Viewer />} />
         <Route path="projects/:id/viewer/:fileId" element={<Viewer />} />
+
+        {/* Reports page */}
+        <Route path="projects/:id/reports" element={<Reports />} />
 
         {/* Future pages - placeholders */}
         <Route path="analysis" element={<ComingSoon title="Analysis" />} />

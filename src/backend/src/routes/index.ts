@@ -4,6 +4,7 @@ import projectsRouter from './projects.js';
 import analysesRouter from './analyses.js';
 import filesRouter from './files.js';
 import viewerRouter from './viewer.js';
+import reportsRouter from './reports.js';
 
 const router = Router();
 
@@ -13,6 +14,7 @@ router.use('/projects', projectsRouter);
 router.use('/analyses', analysesRouter);
 router.use('/files', filesRouter);
 router.use('/viewer', viewerRouter);
+router.use('/reports', reportsRouter);
 
 // API info endpoint
 router.get('/', (_req, res) => {
@@ -25,6 +27,7 @@ router.get('/', (_req, res) => {
       analyses: '/api/v1/analyses',
       files: '/api/v1/files',
       viewer: '/api/v1/viewer',
+      reports: '/api/v1/reports',
     },
   });
 });

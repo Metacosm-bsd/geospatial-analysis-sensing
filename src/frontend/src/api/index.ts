@@ -73,3 +73,25 @@ export type {
   StreamingOptions,
   TreeDetectionResult,
 } from './viewer';
+
+// Reports API
+export {
+  generateReport as generateReportApi,
+  getReportStatus,
+  getReport,
+  downloadReport as downloadReportApi,
+  downloadReportFile,
+  listProjectReports,
+  deleteReport as deleteReportApi,
+  pollReportStatus,
+} from './reports';
+export type {
+  ReportFormat,
+  ReportStatus,
+  ReportOptions,
+  Report,
+  GenerateReportRequest,
+  GenerateReportResponse,
+  ReportStatusResponse,
+  ListReportsResponse,
+} from './reports';

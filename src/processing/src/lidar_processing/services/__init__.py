@@ -12,7 +12,15 @@ from lidar_processing.services.tree_detector import TreeDetector
 from lidar_processing.services.tree_metrics import TreeMetricsExtractor, SpeciesGroup
 from lidar_processing.services.point_extractor import PointExtractor
 
+# Report Generation Services (Sprint 11-12)
+from lidar_processing.services.chart_generator import ChartGenerator
+from lidar_processing.services.stand_analyzer import StandAnalyzer
+from lidar_processing.services.pdf_generator import PDFGenerator
+from lidar_processing.services.excel_generator import ExcelGenerator
+from lidar_processing.services.report_generator import ReportGenerator, generate_report
+
 __all__ = [
+    # Core Processing Services
     "LidarValidator",
     "MetadataExtractor",
     "GroundClassifier",
@@ -21,4 +29,11 @@ __all__ = [
     "TreeMetricsExtractor",
     "SpeciesGroup",
     "PointExtractor",
+    # Report Generation Services
+    "ChartGenerator",
+    "StandAnalyzer",
+    "PDFGenerator",
+    "ExcelGenerator",
+    "ReportGenerator",
+    "generate_report",
 ]
