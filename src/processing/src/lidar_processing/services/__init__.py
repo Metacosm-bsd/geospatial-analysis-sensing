@@ -10,6 +10,7 @@ from lidar_processing.services.ground_classifier import GroundClassifier
 from lidar_processing.services.height_normalizer import HeightNormalizer
 from lidar_processing.services.tree_detector import TreeDetector
 from lidar_processing.services.tree_metrics import TreeMetricsExtractor, SpeciesGroup
+from lidar_processing.services.point_extractor import PointExtractor
 
 __all__ = [
     "LidarValidator",
@@ -19,4 +20,5 @@ __all__ = [
     "TreeDetector",
     "TreeMetricsExtractor",
     "SpeciesGroup",
+    "PointExtractor",
 ]

@@ -4,6 +4,7 @@ import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import Projects from './pages/Projects';
 import ProjectDetail from './pages/ProjectDetail';
+import Viewer from './pages/Viewer';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import ForgotPassword from './pages/ForgotPassword';
@@ -151,6 +152,10 @@ function App() {
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="projects" element={<Projects />} />
         <Route path="projects/:id" element={<ProjectDetail />} />
+
+        {/* 3D Viewer pages */}
+        <Route path="projects/:id/viewer" element={<Viewer />} />
+        <Route path="projects/:id/viewer/:fileId" element={<Viewer />} />
 
         {/* Future pages - placeholders */}
         <Route path="analysis" element={<ComingSoon title="Analysis" />} />

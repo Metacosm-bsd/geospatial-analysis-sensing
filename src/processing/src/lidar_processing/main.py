@@ -34,6 +34,7 @@ from lidar_processing.models import (
 )
 from lidar_processing.services.lidar_validator import LidarValidator
 from lidar_processing.services.metadata_extractor import MetadataExtractor
+from lidar_processing.services.point_extractor import PointExtractor
 from lidar_processing.workers.queue_worker import QueueWorker
 
 logger = logging.getLogger(__name__)
@@ -166,6 +167,7 @@ def _register_routes(app: FastAPI, settings: Settings) -> None:
     # Initialize services
     validator = LidarValidator(settings)
     extractor = MetadataExtractor(settings)
+    point_extractor = PointExtractor(settings)
 
     # ========================================================================
     # Health Check Endpoint
@@ -386,6 +388,174 @@ def _register_routes(app: FastAPI, settings: Settings) -> None:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Job not found: {job_id}. It may still be pending or expired.",
         )
+
+    # ========================================================================
+    # Point Extraction Endpoint (Sprint 9-10)
+    # ========================================================================
+
+    @app.post(
+        "/api/v1/extract-points",
+        tags=["Viewer"],
+        summary="Extract point cloud data",
+        description="""
+        Extracts point cloud data from a LAS/LAZ file for 3D visualization.
+
+        Supports:
+        - LOD (Level of Detail) through downsampling
+        - Binary (base64) and JSON output formats
+        - Chunked streaming for large files
+
+        Returns point data with coordinates, intensity, classification, and RGB.
+        """,
+        responses={
+            200: {"description": "Points extracted successfully"},
+            404: {"description": "File not found"},
+            422: {"description": "Invalid request parameters"},
+        },
+    )
+    async def extract_points(
+        file_path: str,
+        offset: int = 0,
+        limit: int = 1_000_000,
+        downsample_factor: int = 1,
+        format: str = "binary",
+        attributes: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Extract points from a LiDAR file for 3D viewer."""
+        try:
+            result = point_extractor.extract_points(
+                file_path=file_path,
+                offset=offset,
+                limit=limit,
+                downsample_factor=downsample_factor,
+                output_format=format,
+                attributes=attributes,
+            )
+            return result
+
+        except FileNotFoundError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(e),
+            )
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(e),
+            )
+
+    # ========================================================================
+    # File Metadata for Viewer Endpoint (Sprint 9-10)
+    # ========================================================================
+
+    @app.post(
+        "/api/v1/file-metadata",
+        tags=["Viewer"],
+        summary="Get file metadata for viewer",
+        description="""
+        Gets point cloud file metadata optimized for 3D viewer initialization.
+
+        Returns:
+        - Point count and bounds
+        - CRS information
+        - Available attributes (intensity, RGB, classification)
+        - LOD level information
+        """,
+        responses={
+            200: {"description": "Metadata retrieved successfully"},
+            404: {"description": "File not found"},
+        },
+    )
+    async def get_file_metadata_for_viewer(
+        file_path: str,
+        include_lod_info: bool = True,
+    ) -> dict[str, Any]:
+        """Get file metadata for viewer initialization."""
+        try:
+            result = point_extractor.get_file_metadata(
+                file_path=file_path,
+                include_lod_info=include_lod_info,
+            )
+            return result
+
+        except FileNotFoundError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(e),
+            )
+
+    # ========================================================================
+    # CHM Data Endpoint (Sprint 9-10)
+    # ========================================================================
+
+    @app.post(
+        "/api/v1/chm",
+        tags=["Viewer"],
+        summary="Get CHM data",
+        description="""
+        Retrieves Canopy Height Model (CHM) data for visualization.
+
+        Supports multiple output formats:
+        - PNG: Rendered image with colormap
+        - Array: Raw height values as 2D array
+        - GeoTIFF: Georeferenced raster file
+        """,
+        responses={
+            200: {"description": "CHM data retrieved successfully"},
+            404: {"description": "File or CHM not found"},
+        },
+    )
+    async def get_chm_data(
+        file_path: str,
+        format: str = "png",
+        colormap: str = "viridis",
+    ) -> dict[str, Any]:
+        """Get CHM data for visualization."""
+        # CHM generation is handled by the height normalizer service
+        # For now, return a placeholder indicating CHM needs to be generated
+        try:
+            from pathlib import Path
+
+            path = Path(file_path)
+            if not path.exists():
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"File not found: {file_path}",
+                )
+
+            # Check if CHM file exists alongside the LAS file
+            chm_path = path.with_suffix(".chm.tif")
+            if not chm_path.exists():
+                return {
+                    "success": False,
+                    "error": "CHM not available",
+                    "message": "CHM has not been generated for this file. Run height normalization analysis first.",
+                }
+
+            # Return CHM metadata - actual data would be loaded here
+            return {
+                "success": True,
+                "fileId": str(path.stem),
+                "width": 0,  # Would be populated from actual CHM
+                "height": 0,
+                "resolution": 1.0,
+                "bounds": {
+                    "minX": 0, "maxX": 0,
+                    "minY": 0, "maxY": 0,
+                    "minZ": 0, "maxZ": 0,
+                },
+                "noDataValue": -9999,
+                "minHeight": 0,
+                "maxHeight": 0,
+                "format": format,
+                "url": str(chm_path),
+            }
+
+        except FileNotFoundError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(e),
+            )
 
 
 # Create the application instance

@@ -3,6 +3,7 @@ import authRouter from './auth.js';
 import projectsRouter from './projects.js';
 import analysesRouter from './analyses.js';
 import filesRouter from './files.js';
+import viewerRouter from './viewer.js';
 
 const router = Router();
 
@@ -11,6 +12,7 @@ router.use('/auth', authRouter);
 router.use('/projects', projectsRouter);
 router.use('/analyses', analysesRouter);
 router.use('/files', filesRouter);
+router.use('/viewer', viewerRouter);
 
 // API info endpoint
 router.get('/', (_req, res) => {
@@ -22,6 +24,7 @@ router.get('/', (_req, res) => {
       projects: '/api/v1/projects',
       analyses: '/api/v1/analyses',
       files: '/api/v1/files',
+      viewer: '/api/v1/viewer',
     },
   });
 });

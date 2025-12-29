@@ -180,3 +180,6 @@ export * from './dto.js';
 
 // Re-export processing types (Sprint 7-8)
 export * from './processing.js';
+
+// Re-export viewer types (Sprint 9-10)
+export * from './viewer.js';

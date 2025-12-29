@@ -458,6 +458,21 @@ function ProjectDetail() {
 
           {!isEditing && (
             <div className="flex items-center space-x-2">
+              {/* View in 3D button - show if there are ready LAS/LAZ files */}
+              {projectFiles.some(
+                (f) => (f.fileType === 'las' || f.fileType === 'laz') && f.status === 'ready'
+              ) && (
+                <Link
+                  to={`/projects/${id}/viewer`}
+                  className="px-4 py-2 text-sm font-medium text-white bg-forest-600 border border-forest-600 rounded-lg hover:bg-forest-700"
+                >
+                  <svg className="w-4 h-4 inline-block mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                  View in 3D
+                </Link>
+              )}
               <button
                 onClick={() => setIsEditing(true)}
                 className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
@@ -590,11 +605,27 @@ function ProjectDetail() {
                         </td>
                         <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500">{formatDate(file.uploadedAt)}</td>
                         <td className="px-4 py-4 whitespace-nowrap text-right">
-                          <button className="text-gray-400 hover:text-red-600">
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                            </svg>
-                          </button>
+                          <div className="flex items-center justify-end gap-2">
+                            {/* View in 3D button for LAS/LAZ files */}
+                            {(file.fileType === 'las' || file.fileType === 'laz') && file.status === 'ready' && (
+                              <Link
+                                to={`/projects/${id}/viewer/${file.id}`}
+                                className="inline-flex items-center px-2 py-1 text-xs font-medium text-forest-600 bg-forest-50 rounded hover:bg-forest-100 transition-colors"
+                                title="View in 3D Viewer"
+                              >
+                                <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                </svg>
+                                3D
+                              </Link>
+                            )}
+                            <button className="text-gray-400 hover:text-red-600">
+                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}

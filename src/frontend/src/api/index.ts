@@ -56,3 +56,20 @@ export type {
   ProcessingProgress,
   ProcessingResultsResponse,
 } from './processing';
+
+// Viewer API
+export {
+  getPointCloudMetadata,
+  getPointCloudData,
+  streamPointCloudData,
+  getDetectedTrees,
+  getTreesForFile,
+  getPointCloudUrl,
+} from './viewer';
+export type {
+  PointCloudMetadata,
+  PointCloudChunk,
+  PointCloudLoadOptions,
+  StreamingOptions,
+  TreeDetectionResult,
+} from './viewer';
