@@ -12,6 +12,7 @@ export * as reportService from './report.service.js';
 export * as speciesService from './species.service.js';
 export * as speciesFeedbackService from './speciesFeedback.service.js';
 export * as speciesExportService from './speciesExport.service.js';
+export * as volumeService from './volume.service.js';
 export * as storage from './storage/index.js';
 
 // Re-export default exports for convenience
@@ -25,4 +26,5 @@ export { default as reportServiceDefault } from './report.service.js';
 export { default as speciesServiceDefault } from './species.service.js';
 export { default as speciesFeedbackServiceDefault } from './speciesFeedback.service.js';
 export { default as speciesExportServiceDefault } from './speciesExport.service.js';
+export { default as volumeServiceDefault } from './volume.service.js';
 export { default as storageDefault } from './storage/index.js';

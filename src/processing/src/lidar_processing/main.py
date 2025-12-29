@@ -68,6 +68,11 @@ from lidar_processing.services.species_config import (
     get_species_for_region,
 )
 from lidar_processing.workers.queue_worker import QueueWorker
+from lidar_processing.services.allometric_equations import (
+    AllometricEquations,
+    SPECIES_ALLOMETRY,
+    TreeEstimates,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1535,6 +1540,413 @@ def _register_routes(app: FastAPI, settings: Settings) -> None:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=str(e),
             )
+
+    # ========================================================================
+    # DBH & Volume Estimation Endpoints (Sprint 17-18)
+    # ========================================================================
+
+    # Initialize allometric equations service
+    allometric_service = AllometricEquations(region="pnw")
+
+    @app.post(
+        "/api/v1/estimate-dbh",
+        tags=["Volume Estimation"],
+        summary="Estimate DBH from height and crown",
+        description="""
+        Estimates Diameter at Breast Height (DBH) from tree height
+        and optionally crown diameter using species-specific allometric equations.
+
+        Returns DBH estimate in centimeters with a confidence score.
+        """,
+        responses={
+            200: {"description": "DBH estimated successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def estimate_dbh(
+        height_m: float,
+        crown_diameter_m: float | None = None,
+        species_code: str | None = None,
+        method: str = "combined",
+    ) -> dict[str, Any]:
+        """Estimate DBH from height and crown diameter."""
+        try:
+            dbh, confidence = allometric_service.estimate_dbh(
+                height_m=height_m,
+                crown_diameter_m=crown_diameter_m,
+                species_code=species_code,
+                method=method,
+            )
+
+            return {
+                "dbh_cm": round(dbh, 1),
+                "confidence": round(confidence, 3),
+                "height_m": height_m,
+                "crown_diameter_m": crown_diameter_m,
+                "species_code": species_code,
+                "method": method,
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
+    @app.post(
+        "/api/v1/estimate-volume",
+        tags=["Volume Estimation"],
+        summary="Estimate tree volume",
+        description="""
+        Calculates tree volume using FIA (Forest Inventory and Analysis)
+        equations based on DBH and height.
+
+        Returns:
+        - Total stem volume in cubic meters
+        - Merchantable volume (to 4" top)
+        - Board feet (Scribner rule)
+        - Cords
+        """,
+        responses={
+            200: {"description": "Volume estimated successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def estimate_volume(
+        dbh_cm: float,
+        height_m: float,
+        species_code: str | None = None,
+    ) -> dict[str, Any]:
+        """Estimate tree volume from DBH and height."""
+        try:
+            result = allometric_service.calculate_volume_fia(
+                dbh_cm=dbh_cm,
+                height_m=height_m,
+                species_code=species_code,
+            )
+
+            return {
+                "dbh_cm": dbh_cm,
+                "height_m": height_m,
+                "species_code": species_code,
+                "total_volume_m3": result.total_volume_m3,
+                "merchantable_volume_m3": result.merchantable_volume_m3,
+                "board_feet": result.board_feet,
+                "cords": result.cords,
+                "method": result.method,
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
+    @app.post(
+        "/api/v1/estimate-biomass",
+        tags=["Volume Estimation"],
+        summary="Estimate tree biomass and carbon",
+        description="""
+        Calculates tree biomass using Jenkins et al. (2003) allometric
+        equations based on DBH.
+
+        Returns:
+        - Above-ground biomass in kilograms
+        - Biomass components (stem, branch, foliage, roots)
+        - Carbon content (biomass × 0.47)
+        - CO2 equivalent (carbon × 44/12)
+        """,
+        responses={
+            200: {"description": "Biomass estimated successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def estimate_biomass(
+        dbh_cm: float,
+        species_code: str | None = None,
+        include_roots: bool = True,
+    ) -> dict[str, Any]:
+        """Estimate tree biomass from DBH."""
+        try:
+            result = allometric_service.calculate_biomass_jenkins(
+                dbh_cm=dbh_cm,
+                species_code=species_code,
+                include_roots=include_roots,
+            )
+
+            return {
+                "dbh_cm": dbh_cm,
+                "species_code": species_code,
+                "aboveground_biomass_kg": result.aboveground_biomass_kg,
+                "stem_biomass_kg": result.stem_biomass_kg,
+                "branch_biomass_kg": result.branch_biomass_kg,
+                "foliage_biomass_kg": result.foliage_biomass_kg,
+                "root_biomass_kg": result.root_biomass_kg,
+                "carbon_kg": result.carbon_kg,
+                "co2_equivalent_kg": result.co2_equivalent_kg,
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
+    @app.post(
+        "/api/v1/estimate-tree",
+        tags=["Volume Estimation"],
+        summary="Complete tree estimation",
+        description="""
+        Provides complete tree estimates from available measurements,
+        including DBH, volume, biomass, and carbon.
+
+        This is the primary endpoint for calculating all tree metrics
+        from LiDAR-derived height and crown diameter.
+        """,
+        responses={
+            200: {"description": "Tree estimated successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def estimate_tree_complete(
+        tree_id: str,
+        height_m: float,
+        crown_diameter_m: float | None = None,
+        species_code: str | None = None,
+        dbh_cm: float | None = None,
+    ) -> dict[str, Any]:
+        """Calculate complete tree estimates."""
+        try:
+            result = allometric_service.estimate_tree_complete(
+                tree_id=tree_id,
+                height_m=height_m,
+                crown_diameter_m=crown_diameter_m,
+                species_code=species_code,
+                dbh_cm=dbh_cm,
+            )
+
+            return {
+                "tree_id": result.tree_id,
+                "species_code": result.species_code,
+                "dbh_cm": result.dbh_cm,
+                "height_m": result.height_m,
+                "crown_diameter_m": result.crown_diameter_m,
+                "basal_area_m2": result.basal_area_m2,
+                "confidence": result.confidence,
+                "volume": {
+                    "total_m3": result.volume.total_volume_m3,
+                    "merchantable_m3": result.volume.merchantable_volume_m3,
+                    "board_feet": result.volume.board_feet,
+                    "cords": result.volume.cords,
+                },
+                "biomass": {
+                    "aboveground_kg": result.biomass.aboveground_biomass_kg,
+                    "stem_kg": result.biomass.stem_biomass_kg,
+                    "branch_kg": result.biomass.branch_biomass_kg,
+                    "foliage_kg": result.biomass.foliage_biomass_kg,
+                    "root_kg": result.biomass.root_biomass_kg,
+                    "carbon_kg": result.biomass.carbon_kg,
+                    "co2_equivalent_kg": result.biomass.co2_equivalent_kg,
+                },
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
+    @app.post(
+        "/api/v1/estimate-batch",
+        tags=["Volume Estimation"],
+        summary="Batch tree estimation",
+        description="""
+        Calculates estimates for multiple trees in a single request.
+
+        Input should be a list of tree dictionaries with at minimum
+        'height' field. Optional fields: 'crown_diameter', 'species_code', 'tree_id'.
+        """,
+        responses={
+            200: {"description": "Batch estimated successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def estimate_batch(
+        trees: list[dict[str, Any]],
+        height_field: str = "height",
+        crown_field: str = "crown_diameter",
+        species_field: str = "species_code",
+        id_field: str = "tree_id",
+    ) -> dict[str, Any]:
+        """Calculate estimates for a batch of trees."""
+        try:
+            start_time = time.time()
+
+            results = allometric_service.estimate_batch(
+                trees=trees,
+                height_field=height_field,
+                crown_field=crown_field,
+                species_field=species_field,
+                id_field=id_field,
+            )
+
+            processing_time = (time.time() - start_time) * 1000
+
+            # Convert results to dict format
+            tree_results = []
+            for r in results:
+                tree_results.append({
+                    "tree_id": r.tree_id,
+                    "species_code": r.species_code,
+                    "dbh_cm": r.dbh_cm,
+                    "height_m": r.height_m,
+                    "crown_diameter_m": r.crown_diameter_m,
+                    "basal_area_m2": r.basal_area_m2,
+                    "volume_m3": r.volume.total_volume_m3,
+                    "biomass_kg": r.biomass.aboveground_biomass_kg,
+                    "carbon_kg": r.biomass.carbon_kg,
+                    "co2_kg": r.biomass.co2_equivalent_kg,
+                    "confidence": r.confidence,
+                })
+
+            return {
+                "trees": tree_results,
+                "count": len(tree_results),
+                "processing_time_ms": round(processing_time, 2),
+            }
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
+    @app.post(
+        "/api/v1/estimate-stand",
+        tags=["Volume Estimation"],
+        summary="Calculate stand-level totals",
+        description="""
+        Calculates stand-level summary statistics from individual tree estimates.
+
+        Returns per-hectare values for:
+        - Stems, basal area, volume, biomass, carbon, CO2
+        - Mean and dominant heights
+        - Mean and quadratic mean DBH
+        """,
+        responses={
+            200: {"description": "Stand totals calculated successfully"},
+            400: {"description": "Invalid parameters"},
+        },
+    )
+    async def estimate_stand(
+        trees: list[dict[str, Any]],
+        area_hectares: float,
+        height_field: str = "height",
+        crown_field: str = "crown_diameter",
+        species_field: str = "species_code",
+        id_field: str = "tree_id",
+    ) -> dict[str, Any]:
+        """Calculate stand-level summary from trees."""
+        try:
+            # First estimate all trees
+            tree_estimates = allometric_service.estimate_batch(
+                trees=trees,
+                height_field=height_field,
+                crown_field=crown_field,
+                species_field=species_field,
+                id_field=id_field,
+            )
+
+            # Then calculate stand totals
+            stand_totals = allometric_service.calculate_stand_totals(
+                trees=tree_estimates,
+                area_hectares=area_hectares,
+            )
+
+            return stand_totals
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
+    @app.get(
+        "/api/v1/allometry/species",
+        tags=["Volume Estimation"],
+        summary="Get available species allometry",
+        description="""
+        Returns a list of all species with allometric equations available,
+        including their codes, common names, and wood types.
+        """,
+        responses={
+            200: {"description": "Species list returned successfully"},
+        },
+    )
+    async def get_allometry_species() -> list[dict[str, str]]:
+        """Get list of species with allometric equations."""
+        return allometric_service.get_available_species()
+
+    @app.get(
+        "/api/v1/allometry/species/{species_code}",
+        tags=["Volume Estimation"],
+        summary="Get species allometry details",
+        description="""
+        Returns detailed allometric equation coefficients for a specific species,
+        including height-DBH, crown-DBH, volume, and biomass relationships.
+        """,
+        responses={
+            200: {"description": "Species allometry returned successfully"},
+            404: {"description": "Species not found"},
+        },
+    )
+    async def get_species_allometry(species_code: str) -> dict[str, Any]:
+        """Get allometric coefficients for a species."""
+        species_code = species_code.upper()
+
+        if species_code not in SPECIES_ALLOMETRY:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Species not found: {species_code}. Use default equations.",
+            )
+
+        allometry = SPECIES_ALLOMETRY[species_code]
+
+        return {
+            "species_code": allometry.species_code,
+            "common_name": allometry.common_name,
+            "scientific_name": allometry.scientific_name,
+            "wood_type": allometry.wood_type.value,
+            "regions": allometry.regions,
+            "equations": {
+                "height_dbh": {
+                    "description": "DBH = a * H^b",
+                    "a": allometry.height_dbh_a,
+                    "b": allometry.height_dbh_b,
+                },
+                "crown_dbh": {
+                    "description": "Crown = a * DBH^b",
+                    "a": allometry.crown_dbh_a,
+                    "b": allometry.crown_dbh_b,
+                },
+                "volume": {
+                    "description": "V = a * DBH^b * H^c",
+                    "a": allometry.volume_a,
+                    "b": allometry.volume_b,
+                    "c": allometry.volume_c,
+                },
+                "biomass": {
+                    "description": "ln(biomass) = a + b * ln(DBH)",
+                    "a": allometry.biomass_a,
+                    "b": allometry.biomass_b,
+                },
+            },
+            "properties": {
+                "bark_factor": allometry.bark_factor,
+                "wood_density_kg_m3": allometry.wood_density,
+                "form_factor": allometry.form_factor,
+            },
+        }
 
 
 # Create the application instance

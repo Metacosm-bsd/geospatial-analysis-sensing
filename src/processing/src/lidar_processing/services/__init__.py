@@ -40,6 +40,18 @@ from lidar_processing.services.confidence_calibrator import ConfidenceCalibrator
 from lidar_processing.services.feedback_collector import FeedbackCollector
 from lidar_processing.services.batch_classifier import BatchClassifier, BatchStatus, BatchJob
 
+# DBH & Volume Estimation Services (Sprint 17-18)
+from lidar_processing.services.allometric_equations import (
+    AllometricEquations,
+    SpeciesAllometry,
+    SPECIES_ALLOMETRY,
+    VolumeResult,
+    BiomassResult,
+    TreeEstimates,
+    WoodType,
+    RegionCode,
+)
+
 __all__ = [
     # Core Processing Services
     "LidarValidator",
@@ -78,4 +90,13 @@ __all__ = [
     "BatchClassifier",
     "BatchStatus",
     "BatchJob",
+    # DBH & Volume Estimation Services
+    "AllometricEquations",
+    "SpeciesAllometry",
+    "SPECIES_ALLOMETRY",
+    "VolumeResult",
+    "BiomassResult",
+    "TreeEstimates",
+    "WoodType",
+    "RegionCode",
 ]

@@ -6,6 +6,7 @@ import filesRouter from './files.js';
 import viewerRouter from './viewer.js';
 import reportsRouter from './reports.js';
 import speciesRouter from './species.js';
+import volumeRouter from './volume.routes.js';
 
 const router = Router();
 
@@ -17,6 +18,7 @@ router.use('/files', filesRouter);
 router.use('/viewer', viewerRouter);
 router.use('/reports', reportsRouter);
 router.use('/species', speciesRouter);
+router.use('/volume', volumeRouter);
 
 // API info endpoint
 router.get('/', (_req, res) => {
@@ -31,6 +33,7 @@ router.get('/', (_req, res) => {
       viewer: '/api/v1/viewer',
       reports: '/api/v1/reports',
       species: '/api/v1/species',
+      volume: '/api/v1/volume',
     },
   });
 });
