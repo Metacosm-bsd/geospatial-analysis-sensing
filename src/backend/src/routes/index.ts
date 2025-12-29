@@ -12,10 +12,13 @@ import exportRouter from './export.routes.js';
 import organizationsRouter from './organizations.js';
 import commentsRouter from './comments.js';
 import notificationsRouter from './notifications.js';
+import apikeysRouter from './apikeys.js';
+import webhooksRouter from './webhooks.js';
+import publicApiRouter from './public-api/index.js';
 
 const router = Router();
 
-// API routes
+// API routes (authenticated via session/JWT)
 router.use('/auth', authRouter);
 router.use('/projects', projectsRouter);
 router.use('/analyses', analysesRouter);
@@ -29,6 +32,11 @@ router.use('/export', exportRouter);
 router.use('/organizations', organizationsRouter);
 router.use('/comments', commentsRouter);
 router.use('/notifications', notificationsRouter);
+router.use('/api-keys', apikeysRouter);
+router.use('/webhooks', webhooksRouter);
+
+// Public API routes (authenticated via API key)
+router.use('/v1', publicApiRouter);
 
 // API info endpoint
 router.get('/', (_req, res) => {
@@ -36,20 +44,26 @@ router.get('/', (_req, res) => {
     name: 'LiDAR Forest Analysis API',
     version: '1.0.0',
     endpoints: {
-      auth: '/api/v1/auth',
-      projects: '/api/v1/projects',
-      analyses: '/api/v1/analyses',
-      files: '/api/v1/files',
-      viewer: '/api/v1/viewer',
-      reports: '/api/v1/reports',
-      species: '/api/v1/species',
-      volume: '/api/v1/volume',
-      stands: '/api/v1/stands',
-      export: '/api/v1/export',
-      organizations: '/api/v1/organizations',
-      comments: '/api/v1/comments',
-      notifications: '/api/v1/notifications',
+      // Web app routes (JWT auth)
+      auth: '/api/auth',
+      projects: '/api/projects',
+      analyses: '/api/analyses',
+      files: '/api/files',
+      viewer: '/api/viewer',
+      reports: '/api/reports',
+      species: '/api/species',
+      volume: '/api/volume',
+      stands: '/api/stands',
+      export: '/api/export',
+      organizations: '/api/organizations',
+      comments: '/api/comments',
+      notifications: '/api/notifications',
+      apiKeys: '/api/api-keys',
+      webhooks: '/api/webhooks',
+      // Public API (API key auth)
+      publicApi: '/api/v1',
     },
+    documentation: 'https://docs.lidarforest.com/api',
   });
 });
 

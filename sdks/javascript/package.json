@@ -1,0 +1,50 @@
+{
+  "name": "@lidarforest/sdk",
+  "version": "1.0.0",
+  "description": "Official JavaScript/TypeScript SDK for the LiDAR Forest Analysis API",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts",
+    "lint": "eslint src",
+    "test": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "lidar",
+    "forest",
+    "analysis",
+    "sdk",
+    "api",
+    "geospatial"
+  ],
+  "author": "LiDAR Forest",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lidarforest/sdk-javascript"
+  },
+  "homepage": "https://docs.lidarforest.com/sdk/javascript",
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "eslint": "^8.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

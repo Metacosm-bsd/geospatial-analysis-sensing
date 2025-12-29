@@ -801,3 +801,157 @@ enum NotificationType {
   ROLE_CHANGED     // Your role was changed
   REPORT_READY     // Report generation complete
 }
+
+// ============================================================================
+// Public API & Developer Platform (Sprint 49-54)
+// ============================================================================
+
+model ApiKey {
+  id              String    @id @default(uuid())
+
+  // Owner
+  userId          String    @map("user_id")
+  organizationId  String?   @map("organization_id")
+
+  // Key details
+  name            String    // User-friendly name
+  keyPrefix       String    @map("key_prefix")  // First 8 chars for identification
+  keyHash         String    @unique @map("key_hash")  // Hashed full key
+
+  // Permissions and scoping
+  scopes          String[]  // Array of allowed scopes: ['read:projects', 'write:analyses', etc.]
+  tier            ApiTier   @default(FREE)
+
+  // Rate limiting
+  rateLimitPerMinute  Int   @default(60) @map("rate_limit_per_minute")
+  rateLimitPerDay     Int   @default(10000) @map("rate_limit_per_day")
+
+  // Status
+  isActive        Boolean   @default(true) @map("is_active")
+  lastUsedAt      DateTime? @map("last_used_at")
+  expiresAt       DateTime? @map("expires_at")
+
+  // Usage tracking
+  usageLogs       ApiUsageLog[]
+
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  revokedAt       DateTime? @map("revoked_at")
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([keyPrefix])
+  @@index([isActive])
+  @@map("api_keys")
+}
+
+enum ApiTier {
+  FREE        // 60 req/min, 10K req/day
+  STARTER     // 120 req/min, 50K req/day
+  PROFESSIONAL // 300 req/min, 200K req/day
+  ENTERPRISE  // 1000 req/min, unlimited
+}
+
+model ApiUsageLog {
+  id              String    @id @default(uuid())
+
+  // API Key
+  apiKeyId        String    @map("api_key_id")
+  apiKey          ApiKey    @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+
+  // Request details
+  endpoint        String
+  method          String
+  statusCode      Int       @map("status_code")
+  responseTimeMs  Int       @map("response_time_ms")
+
+  // Request metadata
+  ipAddress       String?   @map("ip_address")
+  userAgent       String?   @map("user_agent")
+  requestSize     Int?      @map("request_size")
+  responseSize    Int?      @map("response_size")
+
+  // Error tracking
+  errorMessage    String?   @map("error_message")
+
+  // Timestamp
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  @@index([apiKeyId])
+  @@index([endpoint])
+  @@index([createdAt])
+  @@map("api_usage_logs")
+}
+
+// Webhooks for event notifications
+model Webhook {
+  id              String    @id @default(uuid())
+
+  // Owner
+  userId          String    @map("user_id")
+  organizationId  String?   @map("organization_id")
+
+  // Webhook configuration
+  name            String
+  url             String    // Target URL
+  secret          String    // HMAC signing secret
+
+  // Events to trigger on
+  events          String[]  // ['analysis.completed', 'report.ready', etc.]
+
+  // Status
+  isActive        Boolean   @default(true) @map("is_active")
+  lastTriggeredAt DateTime? @map("last_triggered_at")
+  failureCount    Int       @default(0) @map("failure_count")
+
+  // Delivery logs
+  deliveries      WebhookDelivery[]
+
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([isActive])
+  @@map("webhooks")
+}
+
+model WebhookDelivery {
+  id              String    @id @default(uuid())
+
+  // Webhook
+  webhookId       String    @map("webhook_id")
+  webhook         Webhook   @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  // Event details
+  eventType       String    @map("event_type")
+  payload         Json
+
+  // Delivery status
+  status          WebhookDeliveryStatus @default(PENDING)
+  statusCode      Int?      @map("status_code")
+  responseBody    String?   @map("response_body")
+  errorMessage    String?   @map("error_message")
+
+  // Retry tracking
+  attempts        Int       @default(0)
+  nextRetryAt     DateTime? @map("next_retry_at")
+
+  // Timing
+  requestedAt     DateTime  @default(now()) @map("requested_at")
+  deliveredAt     DateTime? @map("delivered_at")
+
+  @@index([webhookId])
+  @@index([status])
+  @@index([eventType])
+  @@index([requestedAt])
+  @@map("webhook_deliveries")
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  RETRYING
+}

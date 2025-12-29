@@ -1,0 +1,1203 @@
+openapi: 3.1.0
+info:
+  title: LiDAR Forest Analysis API
+  version: 1.0.0
+  description: |
+    REST API for the LiDAR Forest Analysis Platform. Transform LiDAR point cloud data
+    into professional forest inventory reports, carbon stock estimates, and 3D visualizations.
+
+    ## Authentication
+
+    All API requests require authentication via API key. Include your API key in requests using
+    one of these methods:
+
+    - **Authorization header** (recommended): `Authorization: Bearer lf_live_xxx`
+    - **X-API-Key header**: `X-API-Key: lf_live_xxx`
+
+    ## Rate Limits
+
+    Rate limits vary by tier:
+
+    | Tier | Requests/Minute | Requests/Day |
+    |------|-----------------|--------------|
+    | Free | 60 | 10,000 |
+    | Starter | 120 | 50,000 |
+    | Professional | 300 | 200,000 |
+    | Enterprise | 1,000 | Unlimited |
+
+    Rate limit headers are included in all responses:
+    - `X-RateLimit-Limit`: Max requests per minute
+    - `X-RateLimit-Remaining`: Remaining requests this minute
+    - `X-RateLimit-Reset`: Time when the rate limit resets (ISO 8601)
+  contact:
+    name: API Support
+    email: api@lidarforest.com
+    url: https://docs.lidarforest.com
+  license:
+    name: Proprietary
+    url: https://lidarforest.com/terms
+
+servers:
+  - url: https://api.lidarforest.com/api/v1
+    description: Production server
+  - url: https://staging-api.lidarforest.com/api/v1
+    description: Staging server
+
+tags:
+  - name: Projects
+    description: Project management operations
+  - name: Files
+    description: File upload and management
+  - name: Analyses
+    description: LiDAR analysis operations
+  - name: Reports
+    description: Report generation and download
+  - name: Inventory
+    description: Tree and stand data access
+
+security:
+  - BearerAuth: []
+  - ApiKeyAuth: []
+
+paths:
+  # Projects
+  /projects:
+    get:
+      summary: List projects
+      tags: [Projects]
+      operationId: listProjects
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: sortBy
+          in: query
+          schema:
+            type: string
+            enum: [createdAt, updatedAt, name]
+            default: createdAt
+        - name: sortOrder
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        '200':
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimitExceeded'
+    post:
+      summary: Create project
+      tags: [Projects]
+      operationId: createProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProjectInput'
+      responses:
+        '201':
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /projects/{projectId}:
+    get:
+      summary: Get project
+      tags: [Projects]
+      operationId: getProject
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Project details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectDetailResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      summary: Update project
+      tags: [Projects]
+      operationId: updateProject
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProjectInput'
+      responses:
+        '200':
+          description: Project updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      summary: Delete project
+      tags: [Projects]
+      operationId: deleteProject
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Project deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # Files
+  /files:
+    get:
+      summary: List files
+      tags: [Files]
+      operationId: listFiles
+      parameters:
+        - name: projectId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [PENDING, PROCESSING, COMPLETED, FAILED]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of files
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileListResponse'
+
+  /files/upload-url:
+    post:
+      summary: Get upload URL
+      tags: [Files]
+      operationId: getUploadUrl
+      description: Request a presigned URL for file upload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadUrlInput'
+      responses:
+        '201':
+          description: Upload URL generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadUrlResponse'
+
+  /files/{fileId}:
+    get:
+      summary: Get file details
+      tags: [Files]
+      operationId: getFile
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: File details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      summary: Delete file
+      tags: [Files]
+      operationId: deleteFile
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: File deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /files/{fileId}/download-url:
+    get:
+      summary: Get download URL
+      tags: [Files]
+      operationId: getDownloadUrl
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: Download URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DownloadUrlResponse'
+
+  # Analyses
+  /analyses:
+    get:
+      summary: List analyses
+      tags: [Analyses]
+      operationId: listAnalyses
+      parameters:
+        - name: projectId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [PENDING, PROCESSING, COMPLETED, FAILED]
+        - name: type
+          in: query
+          schema:
+            $ref: '#/components/schemas/AnalysisType'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of analyses
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisListResponse'
+    post:
+      summary: Start analysis
+      tags: [Analyses]
+      operationId: createAnalysis
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAnalysisInput'
+      responses:
+        '201':
+          description: Analysis started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /analyses/{analysisId}:
+    get:
+      summary: Get analysis
+      tags: [Analyses]
+      operationId: getAnalysis
+      parameters:
+        - $ref: '#/components/parameters/AnalysisId'
+      responses:
+        '200':
+          description: Analysis details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisDetailResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      summary: Cancel/delete analysis
+      tags: [Analyses]
+      operationId: deleteAnalysis
+      parameters:
+        - $ref: '#/components/parameters/AnalysisId'
+      responses:
+        '200':
+          description: Analysis cancelled/deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /analyses/{analysisId}/results:
+    get:
+      summary: Get analysis results
+      tags: [Analyses]
+      operationId: getAnalysisResults
+      parameters:
+        - $ref: '#/components/parameters/AnalysisId'
+      responses:
+        '200':
+          description: Analysis results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisResultsResponse'
+        '400':
+          description: Analysis not completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /analyses/{analysisId}/trees:
+    get:
+      summary: Get detected trees
+      tags: [Inventory]
+      operationId: getAnalysisTrees
+      parameters:
+        - $ref: '#/components/parameters/AnalysisId'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of detected trees
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TreeListResponse'
+
+  /analyses/{analysisId}/stands:
+    get:
+      summary: Get stand summaries
+      tags: [Inventory]
+      operationId: getAnalysisStands
+      parameters:
+        - $ref: '#/components/parameters/AnalysisId'
+      responses:
+        '200':
+          description: Stand summaries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandListResponse'
+
+  # Reports
+  /reports:
+    get:
+      summary: List reports
+      tags: [Reports]
+      operationId: listReports
+      parameters:
+        - name: projectId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: analysisId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: type
+          in: query
+          schema:
+            $ref: '#/components/schemas/ReportType'
+        - name: format
+          in: query
+          schema:
+            $ref: '#/components/schemas/ReportFormat'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of reports
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportListResponse'
+    post:
+      summary: Generate report
+      tags: [Reports]
+      operationId: createReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReportInput'
+      responses:
+        '201':
+          description: Report generation started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportResponse'
+
+  /reports/{reportId}:
+    get:
+      summary: Get report details
+      tags: [Reports]
+      operationId: getReport
+      parameters:
+        - $ref: '#/components/parameters/ReportId'
+      responses:
+        '200':
+          description: Report details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportDetailResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      summary: Delete report
+      tags: [Reports]
+      operationId: deleteReport
+      parameters:
+        - $ref: '#/components/parameters/ReportId'
+      responses:
+        '200':
+          description: Report deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /reports/{reportId}/download:
+    get:
+      summary: Download report
+      tags: [Reports]
+      operationId: downloadReport
+      parameters:
+        - $ref: '#/components/parameters/ReportId'
+      responses:
+        '200':
+          description: Download URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportDownloadResponse'
+        '410':
+          description: Report expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: API key as Bearer token
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key header
+
+  parameters:
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    FileId:
+      name: fileId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AnalysisId:
+      name: analysisId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ReportId:
+      name: reportId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    # Base types
+    AnalysisType:
+      type: string
+      enum: [TREE_DETECTION, SPECIES_CLASSIFICATION, CARBON_ESTIMATE, FULL_INVENTORY]
+
+    ReportType:
+      type: string
+      enum: [INVENTORY, CARBON, TIMBER_VALUE, GROWTH_PROJECTION, FULL]
+
+    ReportFormat:
+      type: string
+      enum: [PDF, EXCEL, CSV, JSON]
+
+    Status:
+      type: string
+      enum: [PENDING, PROCESSING, COMPLETED, FAILED]
+
+    # Request schemas
+    CreateProjectInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        location:
+          type: string
+          maxLength: 500
+        metadata:
+          type: object
+
+    UpdateProjectInput:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+        location:
+          type: string
+        metadata:
+          type: object
+
+    UploadUrlInput:
+      type: object
+      required: [projectId, filename, fileSize]
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        filename:
+          type: string
+          minLength: 1
+          maxLength: 255
+        fileSize:
+          type: integer
+          minimum: 1
+        mimeType:
+          type: string
+        metadata:
+          type: object
+
+    CreateAnalysisInput:
+      type: object
+      required: [projectId, name, type, fileIds]
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        type:
+          $ref: '#/components/schemas/AnalysisType'
+        fileIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          minItems: 1
+        parameters:
+          type: object
+          description: Analysis-specific parameters
+
+    CreateReportInput:
+      type: object
+      required: [analysisId, name, type]
+      properties:
+        analysisId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        type:
+          $ref: '#/components/schemas/ReportType'
+        format:
+          $ref: '#/components/schemas/ReportFormat'
+        options:
+          type: object
+          properties:
+            includeCharts:
+              type: boolean
+              default: true
+            includeMaps:
+              type: boolean
+              default: true
+            includeAppendix:
+              type: boolean
+              default: false
+            language:
+              type: string
+              default: en
+            units:
+              type: string
+              enum: [metric, imperial]
+              default: metric
+
+    # Response schemas
+    Pagination:
+      type: object
+      properties:
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        hasMore:
+          type: boolean
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+
+    Project:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        location:
+          type: string
+        status:
+          type: string
+        fileCount:
+          type: integer
+        analysisCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ProjectListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Project'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    ProjectResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/Project'
+
+    ProjectDetailResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          allOf:
+            - $ref: '#/components/schemas/Project'
+            - type: object
+              properties:
+                files:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/FileSummary'
+                analyses:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/AnalysisSummary'
+
+    FileSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        fileSize:
+          type: integer
+        status:
+          $ref: '#/components/schemas/Status'
+        createdAt:
+          type: string
+          format: date-time
+
+    File:
+      allOf:
+        - $ref: '#/components/schemas/FileSummary'
+        - type: object
+          properties:
+            projectId:
+              type: string
+              format: uuid
+            originalFilename:
+              type: string
+            mimeType:
+              type: string
+            metadata:
+              type: object
+
+    FileListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/File'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    FileResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/File'
+
+    UploadUrlResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            fileId:
+              type: string
+              format: uuid
+            uploadUrl:
+              type: string
+              format: uri
+            expiresAt:
+              type: string
+              format: date-time
+            instructions:
+              type: object
+              properties:
+                method:
+                  type: string
+                headers:
+                  type: object
+
+    DownloadUrlResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            fileId:
+              type: string
+              format: uuid
+            filename:
+              type: string
+            downloadUrl:
+              type: string
+              format: uri
+            expiresAt:
+              type: string
+              format: date-time
+
+    AnalysisSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type:
+          $ref: '#/components/schemas/AnalysisType'
+        status:
+          $ref: '#/components/schemas/Status'
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+
+    Analysis:
+      allOf:
+        - $ref: '#/components/schemas/AnalysisSummary'
+        - type: object
+          properties:
+            projectId:
+              type: string
+              format: uuid
+            progress:
+              type: integer
+              minimum: 0
+              maximum: 100
+            errorMessage:
+              type: string
+
+    AnalysisListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Analysis'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    AnalysisResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/Analysis'
+        message:
+          type: string
+
+    AnalysisDetailResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          allOf:
+            - $ref: '#/components/schemas/Analysis'
+            - type: object
+              properties:
+                parameters:
+                  type: object
+                startedAt:
+                  type: string
+                  format: date-time
+                files:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      filename:
+                        type: string
+
+    AnalysisResultsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            analysisId:
+              type: string
+              format: uuid
+            type:
+              $ref: '#/components/schemas/AnalysisType'
+            results:
+              type: object
+
+    Tree:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        species:
+          type: string
+        dbh:
+          type: number
+          description: Diameter at breast height (cm)
+        height:
+          type: number
+          description: Tree height (m)
+        crownDiameter:
+          type: number
+          description: Crown diameter (m)
+        latitude:
+          type: number
+        longitude:
+          type: number
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        carbonStock:
+          type: number
+          description: Carbon stock (kg)
+
+    TreeListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tree'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    Stand:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        areaHectares:
+          type: number
+        treeCount:
+          type: integer
+        basalArea:
+          type: number
+        volumePerHectare:
+          type: number
+        dominantSpecies:
+          type: string
+        meanDbh:
+          type: number
+        meanHeight:
+          type: number
+        carbonStockPerHectare:
+          type: number
+
+    StandListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Stand'
+
+    Report:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        analysisId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type:
+          $ref: '#/components/schemas/ReportType'
+        format:
+          $ref: '#/components/schemas/ReportFormat'
+        status:
+          type: string
+          enum: [GENERATING, COMPLETED, FAILED]
+        fileSize:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+
+    ReportListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Report'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    ReportResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/Report'
+        message:
+          type: string
+
+    ReportDetailResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          allOf:
+            - $ref: '#/components/schemas/Report'
+            - type: object
+              properties:
+                options:
+                  type: object
+                generatedAt:
+                  type: string
+                  format: date-time
+
+    ReportDownloadResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            reportId:
+              type: string
+              format: uuid
+            name:
+              type: string
+            format:
+              $ref: '#/components/schemas/ReportFormat'
+            fileSize:
+              type: integer
+            downloadUrl:
+              type: string
+              format: uri
+            expiresAt:
+              type: string
+              format: date-time
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - type: object
+                properties:
+                  hint:
+                    type: string
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RateLimitExceeded:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - type: object
+                properties:
+                  retryAfter:
+                    type: integer
+                  limits:
+                    type: object
